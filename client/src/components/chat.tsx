@@ -26,6 +26,8 @@ import type { ClientSession } from '@chat-template/auth';
 import { softNavigateToChatId } from '@/lib/navigation';
 import { useAppConfig } from '@/contexts/AppConfigContext';
 import { Greeting } from './greeting';
+import { DocumentPreviewProvider } from '@/contexts/DocumentPreviewContext';
+import { DocumentPreviewPanel } from './document-preview-panel';
 
 export function Chat({
   id,
@@ -235,7 +237,7 @@ export function Chat({
         // Ref: https://github.com/vercel/ai/issues/8477#issuecomment-3603209884
         queueMicrotask(() => {
           resumeStream();
-        })
+        });
       } else {
         // Stream completed normally or we've exhausted resume attempts
         if (resumeAttemptCountRef.current >= maxResumeAttempts) {
@@ -284,19 +286,21 @@ export function Chat({
 
   const [attachments, setAttachments] = useState<Array<Attachment>>([]);
 
-  const inputElement = <MultimodalInput
-    chatId={id}
-    input={input}
-    setInput={setInput}
-    status={status}
-    stop={stop}
-    attachments={attachments}
-    setAttachments={setAttachments}
-    messages={messages}
-    setMessages={setMessages}
-    sendMessage={sendMessage}
-    selectedVisibilityType={visibilityType}
-  />
+  const inputElement = (
+    <MultimodalInput
+      chatId={id}
+      input={input}
+      setInput={setInput}
+      status={status}
+      stop={stop}
+      attachments={attachments}
+      setAttachments={setAttachments}
+      messages={messages}
+      setMessages={setMessages}
+      sendMessage={sendMessage}
+      selectedVisibilityType={visibilityType}
+    />
+  );
 
   if (messages.length === 0) {
     return (
@@ -313,30 +317,33 @@ export function Chat({
   }
 
   return (
-    <>
-      <div className="overscroll-behavior-contain flex h-dvh min-w-0 touch-pan-y flex-col bg-background">
-        <ChatHeader title={displayTitle} isLoadingTitle={titlePending && !displayTitle} />
+    <DocumentPreviewProvider resetKey={id}>
+      <div className="flex h-dvh min-w-0">
+        <div className="overscroll-behavior-contain flex h-dvh min-w-0 flex-1 touch-pan-y flex-col bg-background">
+          <ChatHeader
+            title={displayTitle}
+            isLoadingTitle={titlePending && !displayTitle}
+          />
 
-        <Messages
-          status={status}
-          messages={messages}
-          setMessages={setMessages}
-          addToolApprovalResponse={addToolApprovalResponse}
-          regenerate={regenerate}
-          sendMessage={sendMessage}
-          isReadonly={isReadonly}
-          selectedModelId={initialChatModel}
-          feedback={feedback}
-        />
+          <Messages
+            status={status}
+            messages={messages}
+            setMessages={setMessages}
+            addToolApprovalResponse={addToolApprovalResponse}
+            regenerate={regenerate}
+            sendMessage={sendMessage}
+            isReadonly={isReadonly}
+            selectedModelId={initialChatModel}
+            feedback={feedback}
+          />
 
-
-
-        <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl gap-2 border-t-0 bg-background px-2 pb-3 md:px-4 md:pb-4">
-          {!isReadonly && (
-            inputElement
-          )}
+          <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl gap-2 border-t-0 bg-background px-2 pb-3 md:px-4 md:pb-4">
+            {!isReadonly && inputElement}
+          </div>
         </div>
+
+        <DocumentPreviewPanel />
       </div>
-    </>
+    </DocumentPreviewProvider>
   );
 }

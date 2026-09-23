@@ -1,5 +1,4 @@
 import React, { memo, useState } from 'react';
-import { AnimatedAssistantIcon } from './animation-assistant-icon';
 import { Response } from './elements/response';
 import { MessageContent } from './elements/message';
 import {
@@ -38,11 +37,37 @@ import { MessageOAuthError } from './message-oauth-error';
 import { isCredentialErrorMessage } from '@/lib/oauth-error-utils';
 import {
   groupConsecutiveToolSegments,
-  type ChatPart,
   type ToolPart,
 } from '@/lib/tool-group-segments';
 import { Streamdown } from 'streamdown';
 import { useApproval } from '@/hooks/use-approval';
+import { useFileLinkClickHandler } from '@/contexts/DocumentPreviewContext';
+import { buildCitationIndex } from '@/lib/message-citations';
+import { MessageSources } from './message-sources';
+
+const SourceUrlLink = ({
+  url,
+  title,
+  number,
+}: {
+  url: string;
+  title?: string;
+  number?: number;
+}) => {
+  const onClick = useFileLinkClickHandler(url);
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={onClick}
+      title={title}
+      className="inline-flex items-baseline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+    >
+      <sup className="text-xs">[{number ?? (title || url)}]</sup>
+    </a>
+  );
+};
 
 const PurePreviewMessage = ({
   message,
@@ -110,6 +135,12 @@ const PurePreviewMessage = ({
     [message.parts],
   );
 
+  // Numbers cited chunks for inline markers and source cards.
+  const citations = React.useMemo(
+    () => buildCitationIndex(message.parts),
+    [message.parts],
+  );
+
   const renderBlocks = React.useMemo(
     () => groupConsecutiveToolSegments(partSegments),
     [partSegments],
@@ -136,9 +167,9 @@ const PurePreviewMessage = ({
           'justify-start': message.role === 'assistant',
         })}
       >
-        {partSegments.length === 0 && errorParts.length === 0 && message.role === 'assistant' && (
-          <AwaitingResponseMessage />
-        )}
+        {partSegments.length === 0 &&
+          errorParts.length === 0 &&
+          message.role === 'assistant' && <AwaitingResponseMessage />}
 
         <div
           className={cn('flex min-w-0 flex-col gap-3', {
@@ -220,7 +251,9 @@ const PurePreviewMessage = ({
                       })}
                     >
                       <Response>
-                        {sanitizeText(joinMessagePartSegments(parts))}
+                        {sanitizeText(
+                          joinMessagePartSegments(parts, citations.numberFor),
+                        )}
                       </Response>
                     </MessageContent>
                   </div>
@@ -253,15 +286,12 @@ const PurePreviewMessage = ({
             // Support for citations/annotations
             if (type === 'source-url') {
               return (
-                <a
+                <SourceUrlLink
                   key={key}
-                  href={part.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-baseline text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
-                >
-                  <sup className="text-xs">[{part.title || part.url}]</sup>
-                </a>
+                  url={part.url}
+                  title={part.title}
+                  number={citations.numberFor(part.url)}
+                />
               );
             }
 
@@ -278,6 +308,10 @@ const PurePreviewMessage = ({
               );
             }
           })}
+
+          {message.role === 'assistant' && mode === 'view' && (
+            <MessageSources entries={citations.entries} isLoading={isLoading} />
+          )}
 
           {!isReadonly && !hasOnlyErrors && (
             <MessageActions
@@ -323,13 +357,15 @@ export const PreviewMessage = memo(
     if (prevProps.requiresScrollPadding !== nextProps.requiresScrollPadding)
       return false;
     if (!equal(prevProps.message.parts, nextProps.message.parts)) return false;
-    if (prevProps.initialFeedback?.feedbackType !== nextProps.initialFeedback?.feedbackType)
+    if (
+      prevProps.initialFeedback?.feedbackType !==
+      nextProps.initialFeedback?.feedbackType
+    )
       return false;
 
     return true; // Props are equal, skip re-render
   },
 );
-
 
 const MessageToolGroup = ({
   tools,

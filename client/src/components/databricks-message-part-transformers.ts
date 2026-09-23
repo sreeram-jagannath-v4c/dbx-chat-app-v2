@@ -1,5 +1,5 @@
 import type { ChatMessage } from '@chat-template/core';
-import { createDatabricksMessageCitationMarkdown } from './databricks-message-citation';
+import { createDatabricksMessageCitationMarkdown } from '../lib/message-citations';
 import type { TextUIPart } from 'ai';
 
 /**
@@ -61,22 +61,35 @@ export const formatNamePart = (part: ChatMessage['parts'][number]) => {
 /**
  * Takes a segment of parts and joins them into a markdown-formatted string.
  * Used to render citations as part of the associated text.
+ *
+ * When `numberFor` is given, citations are labelled with their source number
+ * ([1], [2], ...) and repeated markers for the same source are collapsed.
  */
-export const joinMessagePartSegments = (parts: ChatMessage['parts']) => {
+export const joinMessagePartSegments = (
+  parts: ChatMessage['parts'],
+  numberFor?: (url: string) => number | undefined,
+) => {
+  let lastLabel: string | undefined;
   return parts.reduce((acc, part) => {
     switch (part.type) {
       case 'text':
+        lastLabel = undefined;
         return acc + part.text;
-      case 'source-url':
-        console.log("acc.endsWith('|')", acc.endsWith('|'));
+      case 'source-url': {
+        const number = numberFor?.(part.url);
+        const label = number === undefined ? undefined : String(number);
+        if (label !== undefined && label === lastLabel) return acc;
+        lastLabel = label;
+        const citation = createDatabricksMessageCitationMarkdown(part, label);
         // Special case for markdown tables
         if (acc.endsWith('|')) {
           // 1. Remove the last pipe
           // 2. Insert the citation markdown
           // 3. Add the pipe back
-          return `${acc.slice(0, -1)} ${createDatabricksMessageCitationMarkdown(part)}|`;
+          return `${acc.slice(0, -1)} ${citation}|`;
         }
-        return `${acc} ${createDatabricksMessageCitationMarkdown(part)}`;
+        return `${acc} ${citation}`;
+      }
       default:
         return acc;
     }

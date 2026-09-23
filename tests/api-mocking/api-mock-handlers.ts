@@ -213,7 +213,9 @@ const MID_STREAM_PARTIAL_TEXT = 'Partial text before';
 
 function inputContains(body: unknown, phrase: string): boolean {
   const input = (body as { input?: unknown[] })?.input;
-  return JSON.stringify(input ?? '').toLowerCase().includes(phrase);
+  return JSON.stringify(input ?? '')
+    .toLowerCase()
+    .includes(phrase);
 }
 
 // ============================================================================
@@ -224,7 +226,9 @@ export const handlers = [
   // Mock chat completions (FMAPI - llm/v1/chat)
   // Use RegExp for better URL matching - matches any URL containing /serving-endpoints/ and ending with /chat/completions
   http.post(/\/serving-endpoints\/[^/]+\/chat\/completions$/, async (req) => {
-    lastServingRequestHeaders = Object.fromEntries(req.request.headers.entries());
+    lastServingRequestHeaders = Object.fromEntries(
+      req.request.headers.entries(),
+    );
     const body = await req.request.clone().json();
     captureRequestContext(req.request.url, body);
     if ((body as { stream?: boolean })?.stream) {
@@ -240,7 +244,9 @@ export const handlers = [
   // URL pattern: {host}/serving-endpoints/responses
   http.post(/\/serving-endpoints\/(?:[^/]+\/)?responses$/, async (req) => {
     // Capture headers for token forwarding tests
-    lastServingRequestHeaders = Object.fromEntries(req.request.headers.entries());
+    lastServingRequestHeaders = Object.fromEntries(
+      req.request.headers.entries(),
+    );
     const body = await req.request.clone().json();
     captureRequestContext(req.request.url, body);
     const isStreaming = (body as { stream?: boolean })?.stream;
@@ -250,7 +256,9 @@ export const handlers = [
     // in the request body before sending to the Databricks API.
     const returnTrace =
       (body as any)?.databricks_options?.return_trace === true;
-    const streamTraceId = returnTrace ? 'mock-trace-id-from-databricks' : undefined;
+    const streamTraceId = returnTrace
+      ? 'mock-trace-id-from-databricks'
+      : undefined;
 
     // Check for MCP approval response in the request
     const { found: hasApprovalResponse, approved } =
@@ -338,6 +346,28 @@ export const handlers = [
     });
   }),
 
+  // Mock Files API download for UC Volume files (used by /api/files/preview).
+  // Mirrors the real API: octet-stream + attachment, 404 for missing files.
+  http.get(/\/api\/2\.0\/fs\/files\/Volumes\/.+$/, ({ request }) => {
+    const path = decodeURIComponent(new URL(request.url).pathname);
+    if (path.includes('missing')) {
+      return HttpResponse.json(
+        { error_code: 'NOT_FOUND', message: 'File not found' },
+        { status: 404 },
+      );
+    }
+    const body = new TextEncoder().encode('%PDF-1.4\n%mock\n');
+    return new HttpResponse(body, {
+      status: 200,
+      headers: {
+        'content-type': 'application/octet-stream',
+        'content-disposition': 'attachment',
+        'content-length': String(body.byteLength),
+        'accept-ranges': 'bytes',
+      },
+    });
+  }),
+
   // Mock fetching oidc token
   http.post(/\/oidc\/v1\/token$/, () => {
     return HttpResponse.json({
@@ -384,70 +414,73 @@ export const handlers = [
   // Validates the request body has the correct structure:
   //   { assessment: { trace_id, assessment_name, source, feedback: { value: boolean } } }
   // Stores the assessment in mlflowAssessmentStore for GET to return.
-  http.post(/\/api\/3\.0\/mlflow\/traces\/([^/]+)\/assessments$/, async (req) => {
-    const url = req.request.url;
-    const traceIdMatch = url.match(/\/traces\/([^/]+)\/assessments/);
-    const traceId = traceIdMatch?.[1] ?? 'unknown';
+  http.post(
+    /\/api\/3\.0\/mlflow\/traces\/([^/]+)\/assessments$/,
+    async (req) => {
+      const url = req.request.url;
+      const traceIdMatch = url.match(/\/traces\/([^/]+)\/assessments/);
+      const traceId = traceIdMatch?.[1] ?? 'unknown';
 
-    const body = (await req.request.json()) as {
-      assessment?: {
-        trace_id?: string;
-        assessment_name?: string;
-        source?: { source_type?: string; source_id?: string };
-        feedback?: { value?: unknown };
+      const body = (await req.request.json()) as {
+        assessment?: {
+          trace_id?: string;
+          assessment_name?: string;
+          source?: { source_type?: string; source_id?: string };
+          feedback?: { value?: unknown };
+        };
       };
-    };
 
-    // Validate required fields — return 400 if malformed so tests catch wrong body format
-    const assessment = body?.assessment;
-    const feedbackValue = assessment?.feedback?.value;
-    if (
-      !assessment ||
-      assessment.trace_id !== traceId ||
-      !assessment.assessment_name ||
-      typeof feedbackValue !== 'boolean'
-    ) {
-      return HttpResponse.json(
-        {
-          error_code: 'INVALID_PARAMETER_VALUE',
-          message: `Mock: invalid assessment body. Got feedback.value=${JSON.stringify(feedbackValue)} (expected boolean)`,
-        },
-        { status: 400 },
-      );
-    }
+      // Validate required fields — return 400 if malformed so tests catch wrong body format
+      const assessment = body?.assessment;
+      const feedbackValue = assessment?.feedback?.value;
+      if (
+        !assessment ||
+        assessment.trace_id !== traceId ||
+        !assessment.assessment_name ||
+        typeof feedbackValue !== 'boolean'
+      ) {
+        return HttpResponse.json(
+          {
+            error_code: 'INVALID_PARAMETER_VALUE',
+            message: `Mock: invalid assessment body. Got feedback.value=${JSON.stringify(feedbackValue)} (expected boolean)`,
+          },
+          { status: 400 },
+        );
+      }
 
-    const assessmentId = `mock-assessment-${traceId}`;
-    const stored: StoredAssessment = {
-      assessment_id: assessmentId,
-      assessment_name: assessment.assessment_name,
-      trace_id: traceId,
-      source: {
-        source_type: assessment.source?.source_type ?? 'HUMAN',
-        source_id: assessment.source?.source_id ?? '',
-      },
-      feedback: { value: feedbackValue },
-    };
-
-    // Store (replace any existing assessment for this trace+source)
-    const existing = mlflowAssessmentStore[traceId] ?? [];
-    const idx = existing.findIndex(
-      (a) => a.source.source_id === stored.source.source_id,
-    );
-    if (idx >= 0) {
-      existing[idx] = stored;
-    } else {
-      existing.push(stored);
-    }
-    mlflowAssessmentStore[traceId] = existing;
-
-    return HttpResponse.json({
-      assessment: {
+      const assessmentId = `mock-assessment-${traceId}`;
+      const stored: StoredAssessment = {
         assessment_id: assessmentId,
-        trace_id: traceId,
         assessment_name: assessment.assessment_name,
-      },
-    });
-  }),
+        trace_id: traceId,
+        source: {
+          source_type: assessment.source?.source_type ?? 'HUMAN',
+          source_id: assessment.source?.source_id ?? '',
+        },
+        feedback: { value: feedbackValue },
+      };
+
+      // Store (replace any existing assessment for this trace+source)
+      const existing = mlflowAssessmentStore[traceId] ?? [];
+      const idx = existing.findIndex(
+        (a) => a.source.source_id === stored.source.source_id,
+      );
+      if (idx >= 0) {
+        existing[idx] = stored;
+      } else {
+        existing.push(stored);
+      }
+      mlflowAssessmentStore[traceId] = existing;
+
+      return HttpResponse.json({
+        assessment: {
+          assessment_id: assessmentId,
+          trace_id: traceId,
+          assessment_name: assessment.assessment_name,
+        },
+      });
+    },
+  ),
 
   // Mock MLflow assessments PATCH endpoint (update existing assessment).
   // URL: PATCH /api/3.0/mlflow/traces/{trace_id}/assessments/{assessment_id}
@@ -491,7 +524,7 @@ export const handlers = [
         return HttpResponse.json(
           {
             error_code: 'INVALID_PARAMETER_VALUE',
-            message: "The field `source` may not be updated.",
+            message: 'The field `source` may not be updated.',
           },
           { status: 400 },
         );
@@ -505,8 +538,11 @@ export const handlers = [
           ...existing[idx],
           feedback: { value: feedbackValue },
           source: {
-            source_type: assessment.source?.source_type ?? existing[idx].source.source_type,
-            source_id: assessment.source?.source_id ?? existing[idx].source.source_id,
+            source_type:
+              assessment.source?.source_type ??
+              existing[idx].source.source_type,
+            source_id:
+              assessment.source?.source_id ?? existing[idx].source.source_id,
           },
         };
         mlflowAssessmentStore[traceId] = existing;

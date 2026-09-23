@@ -1,11 +1,18 @@
-import type { ChatMessage } from '@chat-template/core';
 import type {
   AnchorHTMLAttributes,
   ComponentType,
   PropsWithChildren,
+  ReactNode,
 } from 'react';
+import { useMemo } from 'react';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { cn } from '@/lib/utils';
+import { parseDatabricksFileLink } from '@/lib/document-preview';
+import {
+  decodeDatabricksMessageCitationLink,
+  isDatabricksMessageCitationLink,
+} from '@/lib/message-citations';
+import { useFileLinkClickHandler } from '@/contexts/DocumentPreviewContext';
 
 /**
  * ReactMarkdown/Streamdown component that handles Databricks message citations.
@@ -27,34 +34,22 @@ export const DatabricksMessageCitationStreamdownIntegration: ComponentType<
   return <DefaultAnchor {...props} />;
 };
 
-// const isFootnoteLink
-
-type SourcePart = Extract<ChatMessage['parts'][number], { type: 'source-url' }>;
-
-// Adds a unique suffix to the link to indicate that it is a Databricks message citation.
-const encodeDatabricksMessageCitationLink = (part: SourcePart) =>
-  `${part.url}::databricks_citation`;
-
-// Removes the unique suffix from the link to get the original link.
-const decodeDatabricksMessageCitationLink = (link: string) =>
-  link.replace('::databricks_citation', '');
-
-// Creates a markdown link to the Databricks message citation.
-export const createDatabricksMessageCitationMarkdown = (part: SourcePart) =>
-  `[${part.title || part.url}](${encodeDatabricksMessageCitationLink(part)})`;
-
-// Checks if the link is a Databricks message citation.
-const isDatabricksMessageCitationLink = (
-  link?: string,
-): link is `${string}::databricks_citation` =>
-  link?.endsWith('::databricks_citation') ?? false;
-
 // Renders the Databricks message citation.
+// Numeric labels ([1], [2], ...) render as a compact superscript badge.
 const DatabricksMessageCitationRenderer = (
   props: PropsWithChildren<{
     href: string;
   }>,
 ) => {
+  const fileDoc = useMemo(
+    () => parseDatabricksFileLink(props.href),
+    [props.href],
+  );
+  const tooltip = fileDoc
+    ? `${fileDoc.fileName}${fileDoc.page ? ` · page ${fileDoc.page}` : ''}`
+    : props.href;
+  const isNumbered = isCitationNumberLabel(props.children);
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -62,7 +57,14 @@ const DatabricksMessageCitationRenderer = (
           href={props.href}
           target="_blank"
           rel="noopener noreferrer"
-          className="rounded-md bg-muted-foreground px-2 py-0 text-zinc-200"
+          aria-label={
+            isNumbered ? `Source ${props.children}: ${tooltip}` : undefined
+          }
+          className={
+            isNumbered
+              ? 'mx-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded bg-muted px-1 align-super font-medium text-[10px] text-muted-foreground leading-none no-underline hover:bg-primary hover:text-primary-foreground'
+              : 'rounded-md bg-muted-foreground px-2 py-0 text-zinc-200'
+          }
         >
           {props.children}
         </DefaultAnchor>
@@ -70,19 +72,26 @@ const DatabricksMessageCitationRenderer = (
       <TooltipContent
         style={{ maxWidth: '300px', padding: '8px', wordWrap: 'break-word' }}
       >
-        {props.href}
+        {tooltip}
       </TooltipContent>
     </Tooltip>
   );
 };
 
+const isCitationNumberLabel = (children: ReactNode) => {
+  const text = Array.isArray(children) ? children.join('') : children;
+  return typeof text === 'string' && /^\d+$/.test(text);
+};
+
 // Copied from streamdown
 // https://github.com/vercel/streamdown/blob/dc5bd12e5709afce09814e47cf80884f8c665b3d/packages/streamdown/lib/components.tsx#L157-L181
+// Extended: PDF links in UC Volumes open in the in-page preview panel.
 const DefaultAnchor: ComponentType<AnchorHTMLAttributes<HTMLAnchorElement>> = (
   props,
 ) => {
   const isIncomplete = props.href === 'streamdown:incomplete-link';
   const isFootnoteLink = props.href?.startsWith('#');
+  const onFileLinkClick = useFileLinkClickHandler(props.href);
 
   return (
     <a
@@ -102,6 +111,10 @@ const DefaultAnchor: ComponentType<AnchorHTMLAttributes<HTMLAnchorElement>> = (
             target: '_blank',
             rel: 'noopener noreferrer',
           })}
+      onClick={(event) => {
+        props.onClick?.(event);
+        onFileLinkClick?.(event);
+      }}
     >
       {props.children}
     </a>

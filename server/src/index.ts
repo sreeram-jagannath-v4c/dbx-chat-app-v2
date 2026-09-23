@@ -9,7 +9,7 @@ import express, {
 } from 'express';
 import cors from 'cors';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname } from 'node:path';
 import { chatRouter } from './routes/chat';
 import { storeMessageMeta } from './lib/message-meta-store';
@@ -18,6 +18,7 @@ import { sessionRouter } from './routes/session';
 import { messagesRouter } from './routes/messages';
 import { configRouter } from './routes/config';
 import { feedbackRouter } from './routes/feedback';
+import { filesRouter } from './routes/files';
 import { ChatSDKError } from '@chat-template/core/errors';
 
 // ESM-compatible __dirname
@@ -57,6 +58,7 @@ app.use('/api/session', sessionRouter);
 app.use('/api/messages', messagesRouter);
 app.use('/api/config', configRouter);
 app.use('/api/feedback', feedbackRouter);
+app.use('/api/files', filesRouter);
 
 // Agent backend proxy (optional)
 // If API_PROXY is set, proxy /invocations requests to the agent backend
@@ -143,7 +145,8 @@ async function startServer() {
       );
       console.log('[Test Mode] Attempting to load MSW from:', modulePath);
 
-      const { mockServer } = await import(modulePath);
+      // pathToFileURL: bare absolute paths fail in ESM import() on Windows
+      const { mockServer } = await import(pathToFileURL(modulePath).href);
 
       mockServer.listen({
         onUnhandledRequest: (request: Request) => {
@@ -172,7 +175,7 @@ async function startServer() {
         getLastCapturedRequest,
         resetMlflowAssessmentStore,
         getLastServingRequestHeaders,
-      } = await import(handlersPath);
+      } = await import(pathToFileURL(handlersPath).href);
 
       // Test-only endpoint to get captured requests (for context injection testing)
       app.get('/api/test/captured-requests', (_req, res) => {
