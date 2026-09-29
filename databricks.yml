@@ -60,6 +60,9 @@ targets:
   dev:
     mode: development
     default: true
+    workspace:
+      host: https://adb-1093143178902590.10.azuredatabricks.net
+      profile: adb-1093143178902590
     variables:
       resource_name_suffix: dev-${workspace.current_user.domain_friendly_name}
 
