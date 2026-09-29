@@ -50,3 +50,5 @@ tsconfig.tsbuildinfo
 
 # Databricks bundle state - exclude to prevent stale state when copying the project
 .databricks
+
+.vscode
