@@ -94,11 +94,7 @@ filesRouter.get(
     const fileName = volumePath.split('/').pop() ?? 'document.pdf';
 
     try {
-      const userToken = req.headers['x-forwarded-access-token'];
-      const token =
-        typeof userToken === 'string' && userToken
-          ? userToken
-          : await getDatabricksToken();
+      const token = await getDatabricksToken();
       const hostUrl = await getWorkspaceHostname();
 
       const upstreamHeaders: Record<string, string> = {

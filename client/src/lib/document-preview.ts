@@ -61,3 +61,18 @@ export function buildPreviewUrl(doc: PreviewDocument): string {
   const base = `/api/files/preview?path=${encodeURIComponent(doc.volumePath)}`;
   return doc.page ? `${base}#page=${doc.page}` : base;
 }
+
+/**
+ * Same as buildPreviewUrl, plus PDF open parameters for the embedded viewer:
+ * - navpanes=0 hides the left thumbnail/outline sidebar
+ * - view=FitH fits the page width to the panel (scroll vertically)
+ */
+export function buildEmbedPreviewUrl(doc: PreviewDocument): string {
+  const base = `/api/files/preview?path=${encodeURIComponent(doc.volumePath)}`;
+  const params = [
+    ...(doc.page ? [`page=${doc.page}`] : []),
+    'navpanes=0',
+    'view=FitH',
+  ];
+  return `${base}#${params.join('&')}`;
+}

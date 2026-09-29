@@ -5,14 +5,17 @@ variables:
   serving_endpoint_name:
     description: "Name of the model serving endpoint to be used by the app"
     # TODO: uncomment the line below and specify a default value to avoid needing to specify it on each deployment
-    default: "ka-656f86bb-endpoint"
+    default: "ka-39fe1d5a-endpoint"
   database_instance_name:
     description: "Base name of the Lakebase database instance"
-    default: "chatbot-lakebase"
+    default: "chatbot-lakebase-v2"
   resource_name_suffix:
     description: "Suffix for resource names (app/lakebase instance names etc). Helpful for avoiding name collisions if multiple users deploy this app to the same workspace"
+  pdf_volume_name:
+    description: "Full Unity Catalog path to the PDF volume"
+    default: "poc.agent_files.all_files"
 
-resources:
+resources:  
   database_instances:
     
     chatbot_lakebase:
@@ -22,9 +25,12 @@ resources:
   apps:
     databricks_chatbot:
       # NOTE: customize the app name here, if desired
-      name: db-chatbot-${var.resource_name_suffix}
+      name: db-chatbot-dev2
       description: "Agentic Chat application for Foundation Models, Agent Bricks, and custom code agents"
-      source_code_path: .
+      user_api_scopes:
+        - model-serving
+        - files.files
+      source_code_path: ${workspace.file_path}
       resources:
         - name: serving-endpoint
           description: "Databricks serving endpoint name for the AI agent"
@@ -34,7 +40,14 @@ resources:
           # agent serving endpoints as additional resources here.
           serving_endpoint:
             name: ${var.serving_endpoint_name}
-            permission: CAN_QUERY
+            permission: CAN_MANAGE
+
+        - name: pdf-volume
+          uc_securable:
+            securable_full_name: ${var.pdf_volume_name}
+            securable_type: VOLUME
+            permission: READ_VOLUME
+
         # TODO (optional): Uncomment the database resource below to bind the app to the database instance above
         # and enable persistent chat history
         - name: database
@@ -49,7 +62,7 @@ resources:
         - name: experiment
           description: "MLflow experiment for collecting user feedback"
           experiment:
-            experiment_id: "3504866262228552"
+            experiment_id: "2378321935419041"
             permission: CAN_EDIT
 
 targets:

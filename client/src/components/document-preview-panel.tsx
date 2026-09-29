@@ -6,7 +6,11 @@ import {
   useDocumentPreviewActions,
   usePreviewDocument,
 } from '@/contexts/DocumentPreviewContext';
-import { buildPreviewUrl, type PreviewDocument } from '@/lib/document-preview';
+import {
+  buildEmbedPreviewUrl,
+  buildPreviewUrl,
+  type PreviewDocument,
+} from '@/lib/document-preview';
 import { cn } from '@/lib/utils';
 
 type LoadState =
@@ -38,6 +42,7 @@ export function DocumentPreviewPanel() {
 function PreviewPanelContent({ doc }: { doc: PreviewDocument }) {
   const actions = useDocumentPreviewActions();
   const previewUrl = buildPreviewUrl(doc);
+  const embedUrl = buildEmbedPreviewUrl(doc);
   const [state, setState] = useState<LoadState>({ status: 'loading' });
   const [iframeLoaded, setIframeLoaded] = useState(false);
 
@@ -133,7 +138,7 @@ function PreviewPanelContent({ doc }: { doc: PreviewDocument }) {
             )}
             {state.status === 'ready' && (
               <iframe
-                src={previewUrl}
+                src={embedUrl}
                 title={doc.fileName}
                 className="h-full w-full border-0"
                 onLoad={() => setIframeLoaded(true)}

@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import {
+  buildEmbedPreviewUrl,
   buildPreviewUrl,
   parseDatabricksFileLink,
 } from '../../client/src/lib/document-preview';
@@ -60,6 +61,19 @@ test.describe('buildPreviewUrl', () => {
       }),
     ).toBe(
       '/api/files/preview?path=%2FVolumes%2Fc%2Fs%2Fv%2FMy%20File.pdf#page=2',
+    );
+  });
+
+  test('embed URL hides the nav pane and fits width, keeping the page', () => {
+    expect(
+      buildEmbedPreviewUrl({
+        volumePath: '/Volumes/c/s/v/My File.pdf',
+        fileName: 'My File.pdf',
+        page: 2,
+        originalHref: '',
+      }),
+    ).toBe(
+      '/api/files/preview?path=%2FVolumes%2Fc%2Fs%2Fv%2FMy%20File.pdf#page=2&navpanes=0&view=FitH',
     );
   });
 });
