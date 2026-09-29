@@ -24,7 +24,11 @@ resources:
       # NOTE: customize the app name here, if desired
       name: db-chatbot-${var.resource_name_suffix}
       description: "Agentic Chat application for Foundation Models, Agent Bricks, and custom code agents"
-      source_code_path: .
+      source_code_path: ${workspace.file_path}
+
+      user_api_scopes:
+        -model-serving
+
       resources:
         - name: serving-endpoint
           description: "Databricks serving endpoint name for the AI agent"
