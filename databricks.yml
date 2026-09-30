@@ -7,7 +7,7 @@ variables:
     default: "ka-656f86bb-endpoint"
   database_instance_name:
     description: "Base name of the Lakebase database instance"
-    default: "chatbot-lakebase-v2"
+    default: "chatbot-lakebase-dev"
   resource_name_suffix:
     description: "Suffix for resource names (app/lakebase instance names etc). Helpful for avoiding name collisions if multiple users deploy this app to the same workspace"
   pdf_volume_name:
@@ -24,7 +24,7 @@ resources:
   apps:
     databricks_chatbot:
       # NOTE: customize the app name here, if desired
-      name: db-chatbot-${var.resource_name_suffix}
+      name: db-chatbot-dev
       description: "Agentic Chat application for Foundation Models, Agent Bricks, and custom code agents"
       user_api_scopes:
         - model-serving
