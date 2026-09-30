@@ -75,7 +75,7 @@ function inlineContentDisposition(fileName: string): string {
  *
  * Proxies a PDF from the Databricks Files API so it can be rendered inline
  * (the Files API itself responds with `Content-Disposition: attachment`).
- * Uses the user's OBO token when present, otherwise the app's credentials.
+ * Uses the app's Service Principal credentials.
  */
 filesRouter.get(
   '/preview',
@@ -94,12 +94,12 @@ filesRouter.get(
     const fileName = volumePath.split('/').pop() ?? 'document.pdf';
 
     try {
-      const userToken = req.headers['x-forwarded-access-token'];
-      const token =
-        typeof userToken === 'string' && userToken
-          ? userToken
-          : await getDatabricksToken();
-      const hostUrl = await getWorkspaceHostname();
+      // Force the use of the App's Service Principal token, which is guaranteed
+      // to have access via the uc_securable volume binding in databricks.yml
+      const token = await getDatabricksToken();
+      
+      // Ensure hostUrl doesn't have a trailing slash to prevent malformed API URLs
+      const hostUrl = (await getWorkspaceHostname()).replace(/\/$/, '');
 
       const upstreamHeaders: Record<string, string> = {
         Authorization: `Bearer ${token}`,

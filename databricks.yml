@@ -1,60 +1,73 @@
 bundle:
-  name: databricks-chatbot
+  name: Agent
 
 variables:
   serving_endpoint_name:
     description: "Name of the model serving endpoint to be used by the app"
-    default: "ka-bd75d20a-endpoint"
+    default: "ka-656f86bb-endpoint"
+
+  pdf_volume_name:
+    description: "Full Unity Catalog path to the PDF volume"
+    default: "datascience_qa.curated.sharepoint_files_pdf"
+
   database_instance_name:
     description: "Base name of the Lakebase database instance"
-    default: "chatbot-lakebase"
+    default: "lakebase"
+
   resource_name_suffix:
-    description: "Suffix for resource names (app/lakebase instance names etc). Helpful for avoiding name collisions if multiple users deploy this app to the same workspace"
+    description: "Suffix for resource names (app/lakebase instance names etc)."
 
 resources:
   database_instances:
-    # TODO (optional): Uncomment the database resource below to enable persistent chat history
-    # chatbot_lakebase:
-    #   name: ${var.database_instance_name}-${var.resource_name_suffix}
-    #   capacity: CU_1
+    chatbot_lakebase:
+      name: ${var.database_instance_name}-${var.resource_name_suffix}
+      capacity: CU_1
 
   apps:
     databricks_chatbot:
-      # NOTE: customize the app name here, if desired
-      name: db-chatbot-${var.resource_name_suffix}
+      name: v4c-agent
       description: "Agentic Chat application for Foundation Models, Agent Bricks, and custom code agents"
-      source_code_path: .
+      source_code_path: ${workspace.file_path}
+
+      # Include both scopes so the user's token can query the model AND read files
+      user_api_scopes:
+        - model-serving
+        - files
+
       resources:
         - name: serving-endpoint
           description: "Databricks serving endpoint name for the AI agent"
-          # NOTE: If chatting with an Agent Bricks Multi-Agent Supervisor (https://docs.databricks.com/aws/en/generative-ai/agent-bricks/multi-agent-supervisor),
-          # you need to additionally grant the app service principal the `CAN_QUERY` permission on the
-          # underlying agent(s) that the MAS orchestrates. You can do this by adding those
-          # agent serving endpoints as additional resources here.
           serving_endpoint:
             name: ${var.serving_endpoint_name}
             permission: CAN_QUERY
-        # TODO (optional): Uncomment the database resource below to bind the app to the database instance above
-        # and enable persistent chat history
-        # - name: database
-        #   description: "Lakebase database instance for the chat app"
-        #   database:
-        #     database_name: databricks_postgres
-        #     instance_name: ${resources.database_instances.chatbot_lakebase.name}
-        #     permission: CAN_CONNECT_AND_CREATE
-        # TODO (optional): Uncomment the experiment resource below to enable the feedback widget.
-        # First run `npx tsx scripts/get-experiment-id.ts --endpoint <your-endpoint-name>` to find the experiment ID.
-        # Note: enabling feedback also requires a database (uncomment both TODO database blocks above).
-        # - name: experiment
-        #   description: "MLflow experiment for collecting user feedback"
-        #   experiment:
-        #     experiment_id: "your-experiment-id"
-        #     permission: CAN_EDIT
+
+        # Explicitly bind the volume to the app's sandbox using the correct uc_securable syntax
+        - name: pdf-volume
+          uc_securable:
+            securable_full_name: ${var.pdf_volume_name}
+            securable_type: VOLUME
+            permission: READ_VOLUME
+
+        - name: database
+          description: "Lakebase database instance for the chat app"
+          database:
+            database_name: databricks_postgres
+            instance_name: ${resources.database_instances.chatbot_lakebase.name}
+            permission: CAN_CONNECT_AND_CREATE
+
+        - name: experiment
+          description: "MLflow experiment for collecting user feedback"
+          experiment:
+            experiment_id: "3504866262228552"
+            permission: CAN_EDIT
 
 targets:
   dev:
     mode: development
     default: true
+    workspace:
+      host: https://adb-1093143178902590.10.azuredatabricks.net
+      profile: adb-1093143178902590
     variables:
       resource_name_suffix: dev-${workspace.current_user.domain_friendly_name}
 
