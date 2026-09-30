@@ -12,7 +12,7 @@ variables:
     description: "Suffix for resource names (app/lakebase instance names etc). Helpful for avoiding name collisions if multiple users deploy this app to the same workspace"
   pdf_volume_name:
     description: "Full Unity Catalog path to the PDF volume"
-    default: "poc.agent_files.all_files"
+    default: "datascience_qa.curated.sharepoint_files_pdf"
 
 resources:  
   database_instances:
