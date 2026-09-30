@@ -4,8 +4,7 @@ bundle:
 variables:
   serving_endpoint_name:
     description: "Name of the model serving endpoint to be used by the app"
-    # TODO: uncomment the line below and specify a default value to avoid needing to specify it on each deployment
-    default: "ka-39fe1d5a-endpoint"
+    default: "ka-656f86bb-endpoint"
   database_instance_name:
     description: "Base name of the Lakebase database instance"
     default: "chatbot-lakebase-v2"
@@ -25,7 +24,7 @@ resources:
   apps:
     databricks_chatbot:
       # NOTE: customize the app name here, if desired
-      name: db-chatbot-dev2
+      name: db-chatbot-${var.resource_name_suffix}
       description: "Agentic Chat application for Foundation Models, Agent Bricks, and custom code agents"
       user_api_scopes:
         - model-serving
@@ -40,7 +39,7 @@ resources:
           # agent serving endpoints as additional resources here.
           serving_endpoint:
             name: ${var.serving_endpoint_name}
-            permission: CAN_MANAGE
+            permission: CAN_QUERY
 
         - name: pdf-volume
           uc_securable:
@@ -62,7 +61,7 @@ resources:
         - name: experiment
           description: "MLflow experiment for collecting user feedback"
           experiment:
-            experiment_id: "2378321935419041"
+            experiment_id: "3504866262228552"
             permission: CAN_EDIT
 
 targets:
