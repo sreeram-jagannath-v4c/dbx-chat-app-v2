@@ -14,7 +14,7 @@ const source = (url: string, title?: string) =>
   ({ type: 'source-url', sourceId: url, url, title }) as Part;
 
 test.describe('buildCitationIndex', () => {
-  test('numbers each cited chunk in order of first appearance', () => {
+  test('numbers each cited page in order of first appearance', () => {
     const parts = [
       text('A.'),
       source(fileUrl('b.pdf', 2, 'first chunk'), 'b.pdf'),
@@ -29,17 +29,25 @@ test.describe('buildCitationIndex', () => {
     ];
     const index = buildCitationIndex(parts);
 
-    // Different chunks get separate numbers and cards, even on the same page.
+    // Chunks from the same page share one number and one card.
     expect(
       index.entries.map((e) => [e.number, e.title, e.doc?.page, e.snippet]),
     ).toEqual([
-      [1, 'b.pdf', 2, 'first chunk'],
+      [1, 'b.pdf', 2, undefined], // two different quotes on this page
       [2, 'a.pdf', 1, 'quote'],
       [3, 'b.pdf', 7, 'quote'],
-      [4, 'b.pdf', 2, 'second chunk'],
     ]);
-    // Citing the same chunk again reuses its number.
     expect(index.numberFor(fileUrl('b.pdf', 2, 'first chunk'))).toBe(1);
+    expect(index.numberFor(fileUrl('b.pdf', 2, 'second chunk'))).toBe(1);
+  });
+
+  test('keeps the snippet when a page is cited once or with the same quote', () => {
+    const index = buildCitationIndex([
+      source(fileUrl('a.pdf', 1, 'same'), 'a.pdf'),
+      source(fileUrl('a.pdf', 1, 'same'), 'a.pdf'),
+    ]);
+    expect(index.entries).toHaveLength(1);
+    expect(index.entries[0].snippet).toBe('same');
   });
 
   test('extracts a readable snippet from the text fragment', () => {
@@ -80,6 +88,19 @@ test.describe('joinMessagePartSegments with numbering', () => {
 
     expect(markdown).toBe(
       `First. [1](${fileUrl('a.pdf', 1)}::databricks_citation) [2](${fileUrl('a.pdf', 3)}::databricks_citation)`,
+    );
+  });
+
+  test('collapses adjacent citations from different chunks of one page', () => {
+    const parts = [
+      text('Fact.'),
+      source(fileUrl('a.pdf', 1, 'one'), 'a.pdf'),
+      source(fileUrl('a.pdf', 1, 'two'), 'a.pdf'),
+      source(fileUrl('a.pdf', 1, 'three'), 'a.pdf'),
+    ];
+    const { numberFor } = buildCitationIndex(parts);
+    expect(joinMessagePartSegments(parts, numberFor)).toBe(
+      `Fact. [1](${fileUrl('a.pdf', 1, 'one')}::databricks_citation)`,
     );
   });
 

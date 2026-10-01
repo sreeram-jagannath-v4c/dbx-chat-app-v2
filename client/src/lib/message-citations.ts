@@ -39,7 +39,10 @@ export interface CitationEntry {
   url: string;
   /** Previewable PDF at the cited page, or null for other links. */
   doc: PreviewDocument | null;
-  /** Start of the quoted chunk, from the link's `:~:text=` fragment. */
+  /**
+   * Start of the quoted chunk, from the link's `:~:text=` fragment. Only set
+   * when every citation of this page quotes the same text; cleared otherwise.
+   */
   snippet?: string;
 }
 
@@ -48,15 +51,14 @@ export interface CitationIndex {
   numberFor: (url: string) => number | undefined;
 }
 
-// One number (and card) per cited chunk: PDF links are keyed by file, page
-// and quoted text, so different chunks of the same file or page get separate
-// numbers. Non-PDF links are keyed by URL without the fragment.
+// One number (and card) per cited page: PDF links are keyed by file and page,
+// so several chunks cited from the same page share a number and a single
+// thumbnail. Non-PDF links are keyed by URL without the fragment.
 function citationKey(url: string, doc: PreviewDocument | null): string {
-  const hashIndex = url.indexOf('#');
   if (doc) {
-    const fragment = hashIndex === -1 ? '' : url.slice(hashIndex);
-    return `${doc.volumePath}#page=${doc.page ?? 1}|${textFragment(fragment) ?? ''}`;
+    return `${doc.volumePath}#page=${doc.page ?? 1}`;
   }
+  const hashIndex = url.indexOf('#');
   return hashIndex === -1 ? url : url.slice(0, hashIndex);
 }
 
@@ -92,7 +94,8 @@ function snippetFromUrl(url: string): string | undefined {
 }
 
 /**
- * Numbers the message's cited sources in order of first appearance.
+ * Numbers the message's cited sources (one per PDF page) in order of first
+ * appearance.
  */
 export function buildCitationIndex(parts: ChatMessage['parts']): CitationIndex {
   const entries: CitationEntry[] = [];
@@ -104,7 +107,16 @@ export function buildCitationIndex(parts: ChatMessage['parts']): CitationIndex {
     const doc = parseDatabricksFileLink(part.url);
     const key = citationKey(part.url, doc);
     keyByUrl.set(part.url, key);
-    if (byKey.has(key)) continue;
+
+    const existing = byKey.get(key);
+    if (existing) {
+      // Another chunk from the same page: reuse the number and card. A single
+      // snippet would misrepresent the page, so drop it if the quotes differ.
+      if (existing.doc && existing.snippet !== snippetFromUrl(part.url)) {
+        existing.snippet = undefined;
+      }
+      continue;
+    }
 
     const entry: CitationEntry = {
       number: entries.length + 1,
