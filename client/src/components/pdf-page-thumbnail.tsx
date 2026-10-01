@@ -14,7 +14,8 @@ type ThumbnailState =
  */
 export function PdfPageThumbnail({
   doc,
-  width = 160,
+  // UPDATED: Increased the default width from 160 to 320 to fix blurriness on the cards
+  width = 320,
 }: {
   doc: PreviewDocument;
   width?: number;
@@ -26,6 +27,7 @@ export function PdfPageThumbnail({
   useEffect(() => {
     const element = containerRef.current;
     if (!element) return;
+
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) {
@@ -35,14 +37,17 @@ export function PdfPageThumbnail({
       },
       { rootMargin: '200px' },
     );
+
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
     if (!visible) return;
+
     let cancelled = false;
     setState({ status: 'loading' });
+
     getPdfThumbnail(doc, width)
       .then((src) => {
         if (!cancelled) setState({ status: 'ready', src });
@@ -51,6 +56,7 @@ export function PdfPageThumbnail({
         console.error('Failed to render PDF thumbnail:', error);
         if (!cancelled) setState({ status: 'error' });
       });
+
     return () => {
       cancelled = true;
     };
@@ -62,7 +68,8 @@ export function PdfPageThumbnail({
         <img
           src={state.src}
           alt={`Page ${doc.page ?? 1} of ${doc.fileName}`}
-          className="h-full w-full object-cover object-top"
+          // UPDATED: Changed `object-cover` to `object-contain` to stop the card image from zooming in and cropping
+          className="h-full w-full object-contain object-top"
           draggable={false}
         />
       ) : state.status === 'error' ? (

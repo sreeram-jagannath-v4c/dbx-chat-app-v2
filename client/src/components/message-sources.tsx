@@ -24,11 +24,21 @@ export function MessageSources({
   const actions = useDocumentPreviewActions();
   if (entries.length === 0) return null;
 
+  // NEW LOGIC: Deduplicate entries based on the URL and document page number.
+  // This uses findIndex to keep only the first occurrence of a specific page from a specific PDF,
+  // preventing 5 identical cards from showing up when chunks from the same page are returned 5 times.
+  const uniqueEntries = entries.filter((entry, index, self) =>
+    index === self.findIndex((e) =>
+      e.url === entry.url && e.doc?.page === entry.doc?.page
+    )
+  );
+
   return (
     <section aria-label="Sources" className="flex flex-col gap-2">
       <p className="font-medium text-muted-foreground text-xs">Sources</p>
       <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
-        {entries.map((entry) => {
+        {/* UPDATED: Map over uniqueEntries instead of the raw entries array */}
+        {uniqueEntries.map((entry) => {
           const thumbnail = (
             <div className="relative aspect-[3/4] w-full overflow-hidden border-b bg-muted">
               {entry.doc ? (
