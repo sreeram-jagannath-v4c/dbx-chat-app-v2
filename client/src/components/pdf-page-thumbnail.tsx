@@ -15,13 +15,19 @@ type ThumbnailState =
 export function PdfPageThumbnail({
   doc,
   width = 160,
+  onAspectRatio,
 }: {
   doc: PreviewDocument;
   width?: number;
+  /** Called with the page's width / height once it has rendered. */
+  onAspectRatio?: (aspectRatio: number) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
   const [state, setState] = useState<ThumbnailState>({ status: 'idle' });
+  // Kept in a ref so an inline callback doesn't re-trigger rendering.
+  const onAspectRatioRef = useRef(onAspectRatio);
+  onAspectRatioRef.current = onAspectRatio;
 
   useEffect(() => {
     const element = containerRef.current;
@@ -44,8 +50,10 @@ export function PdfPageThumbnail({
     let cancelled = false;
     setState({ status: 'loading' });
     getPdfThumbnail(doc, width)
-      .then((src) => {
-        if (!cancelled) setState({ status: 'ready', src });
+      .then(({ src, aspectRatio }) => {
+        if (cancelled) return;
+        setState({ status: 'ready', src });
+        onAspectRatioRef.current?.(aspectRatio);
       })
       .catch((error) => {
         console.error('Failed to render PDF thumbnail:', error);
