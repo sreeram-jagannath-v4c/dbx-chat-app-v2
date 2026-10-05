@@ -14,7 +14,7 @@ const source = (url: string, title?: string) =>
   ({ type: 'source-url', sourceId: url, url, title }) as Part;
 
 test.describe('buildCitationIndex', () => {
-  test('numbers each cited chunk in order of first appearance', () => {
+  test('numbers each cited page in order of first appearance', () => {
     const parts = [
       text('A.'),
       source(fileUrl('b.pdf', 2, 'first chunk'), 'b.pdf'),
@@ -29,26 +29,14 @@ test.describe('buildCitationIndex', () => {
     ];
     const index = buildCitationIndex(parts);
 
-    // Different chunks get separate numbers and cards, even on the same page.
-    expect(
-      index.entries.map((e) => [e.number, e.title, e.doc?.page, e.snippet]),
-    ).toEqual([
-      [1, 'b.pdf', 2, 'first chunk'],
-      [2, 'a.pdf', 1, 'quote'],
-      [3, 'b.pdf', 7, 'quote'],
-      [4, 'b.pdf', 2, 'second chunk'],
+    // Different chunks of the same page share one number and card.
+    expect(index.entries.map((e) => [e.number, e.title, e.doc?.page])).toEqual([
+      [1, 'b.pdf', 2],
+      [2, 'a.pdf', 1],
+      [3, 'b.pdf', 7],
     ]);
-    // Citing the same chunk again reuses its number.
     expect(index.numberFor(fileUrl('b.pdf', 2, 'first chunk'))).toBe(1);
-  });
-
-  test('extracts a readable snippet from the text fragment', () => {
-    const url = `${fileUrl('a.pdf', 1)}`.replace(
-      /text=.*$/,
-      `text=${encodeURIComponent('Multi-Optimizer\nEnsemble')},${encodeURIComponent('end')}`,
-    );
-    const [entry] = buildCitationIndex([source(url, 'a.pdf')]).entries;
-    expect(entry.snippet).toBe('Multi-Optimizer Ensemble');
+    expect(index.numberFor(fileUrl('b.pdf', 2, 'second chunk'))).toBe(1);
   });
 
   test('keys non-PDF links by URL without fragment', () => {
@@ -80,6 +68,22 @@ test.describe('joinMessagePartSegments with numbering', () => {
 
     expect(markdown).toBe(
       `First. [1](${fileUrl('a.pdf', 1)}::databricks_citation) [2](${fileUrl('a.pdf', 3)}::databricks_citation)`,
+    );
+  });
+
+  test('shows each number once per run of citations', () => {
+    const parts = [
+      text('First.'),
+      source(fileUrl('a.pdf', 2, 'chunk one'), 'a.pdf'),
+      source(fileUrl('a.pdf', 7), 'a.pdf'),
+      source(fileUrl('a.pdf', 2, 'chunk two'), 'a.pdf'),
+      text(' Second.'),
+      source(fileUrl('a.pdf', 2, 'chunk three'), 'a.pdf'),
+    ];
+    const { numberFor } = buildCitationIndex(parts);
+
+    expect(joinMessagePartSegments(parts, numberFor)).toBe(
+      `First. [1](${fileUrl('a.pdf', 2, 'chunk one')}::databricks_citation) [2](${fileUrl('a.pdf', 7)}::databricks_citation) Second. [1](${fileUrl('a.pdf', 2, 'chunk three')}::databricks_citation)`,
     );
   });
 

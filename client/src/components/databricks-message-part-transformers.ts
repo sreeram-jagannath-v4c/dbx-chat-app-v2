@@ -63,23 +63,26 @@ export const formatNamePart = (part: ChatMessage['parts'][number]) => {
  * Used to render citations as part of the associated text.
  *
  * When `numberFor` is given, citations are labelled with their source number
- * ([1], [2], ...) and repeated markers for the same source are collapsed.
+ * ([1], [2], ...) and each number appears once per run of citations.
  */
 export const joinMessagePartSegments = (
   parts: ChatMessage['parts'],
   numberFor?: (url: string) => number | undefined,
 ) => {
-  let lastLabel: string | undefined;
+  // Labels already emitted since the last text part
+  const runLabels = new Set<string>();
   return parts.reduce((acc, part) => {
     switch (part.type) {
       case 'text':
-        lastLabel = undefined;
+        runLabels.clear();
         return acc + part.text;
       case 'source-url': {
         const number = numberFor?.(part.url);
         const label = number === undefined ? undefined : String(number);
-        if (label !== undefined && label === lastLabel) return acc;
-        lastLabel = label;
+        if (label !== undefined) {
+          if (runLabels.has(label)) return acc;
+          runLabels.add(label);
+        }
         const citation = createDatabricksMessageCitationMarkdown(part, label);
         // Special case for markdown tables
         if (acc.endsWith('|')) {

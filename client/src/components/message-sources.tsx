@@ -86,14 +86,6 @@ function SourceCard({
           Page {entry.doc.page}
         </span>
       )}
-      {entry.snippet && (
-        <span
-          className="line-clamp-2 text-[11px] text-muted-foreground italic"
-          title={entry.snippet}
-        >
-          “{entry.snippet}”
-        </span>
-      )}
     </div>
   );
   const className = cn(cardClassName, isLandscape ? 'w-64' : 'w-36');

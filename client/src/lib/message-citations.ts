@@ -39,8 +39,6 @@ export interface CitationEntry {
   url: string;
   /** Previewable PDF at the cited page, or null for other links. */
   doc: PreviewDocument | null;
-  /** Start of the quoted chunk, from the link's `:~:text=` fragment. */
-  snippet?: string;
 }
 
 export interface CitationIndex {
@@ -48,47 +46,13 @@ export interface CitationIndex {
   numberFor: (url: string) => number | undefined;
 }
 
-// One number (and card) per cited chunk: PDF links are keyed by file, page
-// and quoted text, so different chunks of the same file or page get separate
-// numbers. Non-PDF links are keyed by URL without the fragment.
+// One number (and card) per cited page: PDF links are keyed by file and page,
+// so different chunks of the same page share a number. Non-PDF links are keyed
+// by URL without the fragment.
 function citationKey(url: string, doc: PreviewDocument | null): string {
+  if (doc) return `${doc.volumePath}#page=${doc.page ?? 1}`;
   const hashIndex = url.indexOf('#');
-  if (doc) {
-    const fragment = hashIndex === -1 ? '' : url.slice(hashIndex);
-    return `${doc.volumePath}#page=${doc.page ?? 1}|${textFragment(fragment) ?? ''}`;
-  }
   return hashIndex === -1 ? url : url.slice(0, hashIndex);
-}
-
-// Raw value of a `:~:text=` directive (text fragment), if present.
-function textFragment(hash: string): string | undefined {
-  const match = /:~:(?:.*&)?text=([^&]*)/.exec(hash);
-  return match?.[1] || undefined;
-}
-
-const MAX_SNIPPET_LENGTH = 160;
-
-// Readable start of the quoted text. Text fragments look like
-// `[prefix-,]textStart[,textEnd][,-suffix]` with each part URL-encoded.
-function snippetFromUrl(url: string): string | undefined {
-  const hashIndex = url.indexOf('#');
-  if (hashIndex === -1) return undefined;
-  const fragment = textFragment(url.slice(hashIndex));
-  if (!fragment) return undefined;
-
-  const start = fragment.split(',').find((segment) => !segment.endsWith('-'));
-  if (!start) return undefined;
-  let text: string;
-  try {
-    text = decodeURIComponent(start);
-  } catch {
-    return undefined;
-  }
-  text = text.replace(/\s+/g, ' ').trim();
-  if (!text) return undefined;
-  return text.length > MAX_SNIPPET_LENGTH
-    ? `${text.slice(0, MAX_SNIPPET_LENGTH).trimEnd()}…`
-    : text;
 }
 
 /**
@@ -112,7 +76,6 @@ export function buildCitationIndex(parts: ChatMessage['parts']): CitationIndex {
       title: doc?.fileName ?? part.title ?? part.url,
       url: part.url,
       doc,
-      snippet: doc ? snippetFromUrl(part.url) : undefined,
     };
     entries.push(entry);
     byKey.set(key, entry);
