@@ -1,17 +1,34 @@
-import type { PDFDocumentProxy } from 'pdfjs-dist';
+import type { PDFDocumentProxy, PDFWorker } from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { buildPreviewUrl, type PreviewDocument } from './document-preview';
 
-// pdf.js is loaded lazily so it stays out of the main bundle.
-let pdfjsPromise: Promise<typeof import('pdfjs-dist')> | undefined;
+type Pdfjs = typeof import('pdfjs-dist');
+
+// pdf.js is loaded lazily so it stays out of the main bundle. All documents
+// share one worker instead of each starting its own.
+let pdfjsPromise: Promise<{ pdfjs: Pdfjs; worker: PDFWorker }> | undefined;
 
 function loadPdfjs() {
   pdfjsPromise ??= import('pdfjs-dist').then((pdfjs) => {
     pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
-    return pdfjs;
+    return { pdfjs, worker: new pdfjs.PDFWorker() };
   });
   return pdfjsPromise;
 }
+
+/**
+ * Starts loading pdf.js and its worker ahead of the first thumbnail, so they
+ * download in parallel with the first document.
+ */
+export function preloadPdfjs(): void {
+  loadPdfjs().catch((error) => {
+    pdfjsPromise = undefined;
+    console.error('Failed to load pdf.js:', error);
+  });
+}
+
+// Larger than pdf.js's 64 KB default: fewer round trips through the app.
+const RANGE_CHUNK_SIZE = 256 * 1024;
 
 export interface PdfThumbnail {
   src: string;
@@ -30,13 +47,15 @@ function loadDocument(volumePath: string): Promise<PDFDocumentProxy> {
   let promise = documents.get(volumePath);
   if (!promise) {
     promise = loadPdfjs().then(
-      (pdfjs) =>
+      ({ pdfjs, worker }) =>
         pdfjs.getDocument({
           url: buildPreviewUrl({ volumePath, fileName: '', originalHref: '' }),
           withCredentials: true,
+          worker,
           // Fetch only the byte ranges needed to render the requested page.
           disableAutoFetch: true,
           disableStream: true,
+          rangeChunkSize: RANGE_CHUNK_SIZE,
         }).promise,
     );
     // Allow a retry after a failed load.

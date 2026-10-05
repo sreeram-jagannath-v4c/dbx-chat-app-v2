@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { PdfPageThumbnail } from './pdf-page-thumbnail';
-import { Skeleton } from './ui/skeleton';
 import { useDocumentPreviewActions } from '@/contexts/DocumentPreviewContext';
 import type { CitationEntry } from '@/lib/message-citations';
+import { preloadPdfjs } from '@/lib/pdf-thumbnails';
 import { cn } from '@/lib/utils';
 
 const cardClassName =
@@ -13,15 +13,16 @@ const cardClassName =
  * Cards for the sources cited in an assistant message, numbered to match the
  * inline citation markers. PDF sources show the cited page and open the
  * preview panel; other sources open in a new tab.
+ *
+ * Thumbnails start loading as soon as a source arrives, while the answer is
+ * still streaming. Entries only ever append, so cards stay stable.
  */
-export function MessageSources({
-  entries,
-  isLoading,
-}: {
-  entries: CitationEntry[];
-  /** While streaming, thumbnails are deferred until sources settle. */
-  isLoading: boolean;
-}) {
+export function MessageSources({ entries }: { entries: CitationEntry[] }) {
+  const hasPdf = entries.some((entry) => entry.doc);
+  useEffect(() => {
+    if (hasPdf) preloadPdfjs();
+  }, [hasPdf]);
+
   if (entries.length === 0) return null;
 
   return (
@@ -29,20 +30,14 @@ export function MessageSources({
       <p className="font-medium text-muted-foreground text-xs">Sources</p>
       <div className="-mx-1 flex items-start gap-2 overflow-x-auto px-1 pb-1">
         {entries.map((entry) => (
-          <SourceCard key={entry.key} entry={entry} isLoading={isLoading} />
+          <SourceCard key={entry.key} entry={entry} />
         ))}
       </div>
     </section>
   );
 }
 
-function SourceCard({
-  entry,
-  isLoading,
-}: {
-  entry: CitationEntry;
-  isLoading: boolean;
-}) {
+function SourceCard({ entry }: { entry: CitationEntry }) {
   const actions = useDocumentPreviewActions();
   // Width / height of the rendered page. Landscape pages (e.g. PDFs exported
   // from slide decks) get a wider card showing the whole page uncropped.
@@ -58,14 +53,7 @@ function SourceCard({
       style={isLandscape ? { aspectRatio: pageAspectRatio } : undefined}
     >
       {entry.doc ? (
-        isLoading ? (
-          <Skeleton className="h-full w-full rounded-none" />
-        ) : (
-          <PdfPageThumbnail
-            doc={entry.doc}
-            onAspectRatio={setPageAspectRatio}
-          />
-        )
+        <PdfPageThumbnail doc={entry.doc} onAspectRatio={setPageAspectRatio} />
       ) : (
         <div className="flex h-full w-full items-center justify-center text-muted-foreground">
           <ExternalLink className="size-6" />

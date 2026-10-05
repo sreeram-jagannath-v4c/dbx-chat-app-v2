@@ -310,7 +310,7 @@ const PurePreviewMessage = ({
           })}
 
           {message.role === 'assistant' && mode === 'view' && (
-            <MessageSources entries={citations.entries} isLoading={isLoading} />
+            <MessageSources entries={citations.entries} />
           )}
 
           {!isReadonly && !hasOnlyErrors && (
