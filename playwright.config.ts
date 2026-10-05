@@ -5,7 +5,7 @@ import { config } from 'dotenv';
  * Dual-Mode Testing Configuration
  *
  * Tests can run in two modes:
- * - with-db: Tests with PostgreSQL database (persistent mode)
+ * - with-db: Tests with Delta chat history tables (persistent mode)
  *   - Loads .env first (contains database config)
  *   - Verifies isDatabaseAvailable() returns true
  *   - Passes database configuration to the server process
@@ -34,13 +34,17 @@ console.log(`[Playwright] Running in "${TEST_MODE}" mode)`);
 // For with-db mode, verify database is available
 if (TEST_MODE === 'with-db') {
   const hasDatabaseVars =
-    process.env.POSTGRES_URL || (process.env.PGHOST && process.env.PGDATABASE);
+    process.env.DATABRICKS_WAREHOUSE_ID &&
+    process.env.CHAT_HISTORY_CATALOG &&
+    process.env.CHAT_HISTORY_SCHEMA;
 
   if (!hasDatabaseVars) {
     console.error(
       '\n❌ ERROR: Running with-db tests but no database configuration found!',
     );
-    console.error('Expected POSTGRES_URL or PGHOST+PGDATABASE in .env');
+    console.error(
+      'Expected DATABRICKS_WAREHOUSE_ID, CHAT_HISTORY_CATALOG and CHAT_HISTORY_SCHEMA in .env',
+    );
     console.error('\nPlease either:');
     console.error('  1. Add database configuration to .env, or');
     console.error('  2. Run ephemeral tests instead: npm run test:ephemeral\n');
@@ -141,18 +145,15 @@ export default defineConfig({
         DATABRICKS_HOST: 'mock-value',
         ...(TEST_MODE === 'ephemeral'
           ? {
-              POSTGRES_URL: '',
-              PGHOST: '',
-              PGDATABASE: '',
-              PGUSER: '',
-              PGPASSWORD: '',
-              PGSSLMODE: '',
+              DATABRICKS_WAREHOUSE_ID: '',
+              CHAT_HISTORY_CATALOG: '',
+              CHAT_HISTORY_SCHEMA: '',
             }
           : {
               // In with-db mode, clear mock Databricks credentials so the server
               // falls back to CLI auth (DATABRICKS_CONFIG_PROFILE). CLI auth
               // fetches tokens via a subprocess, bypassing MSW interception, so
-              // the real Lakebase token is used for the DB connection.
+              // the real token is used for SQL warehouse calls.
               // Clearing HOST is critical: getDatabricksCliToken passes HOST as
               // --host to the CLI, so 'mock-value' would break token fetching.
               DATABRICKS_CLIENT_ID: '',
@@ -160,12 +161,10 @@ export default defineConfig({
               DATABRICKS_HOST: '',
               DATABRICKS_CONFIG_PROFILE:
                 process.env.DATABRICKS_CONFIG_PROFILE ?? '',
-              POSTGRES_URL: process.env.POSTGRES_URL ?? '',
-              PGHOST: process.env.PGHOST ?? '',
-              PGDATABASE: process.env.PGDATABASE ?? '',
-              PGUSER: process.env.PGUSER ?? '',
-              PGPASSWORD: process.env.PGPASSWORD ?? '',
-              PGSSLMODE: process.env.PGSSLMODE ?? '',
+              DATABRICKS_WAREHOUSE_ID:
+                process.env.DATABRICKS_WAREHOUSE_ID ?? '',
+              CHAT_HISTORY_CATALOG: process.env.CHAT_HISTORY_CATALOG ?? '',
+              CHAT_HISTORY_SCHEMA: process.env.CHAT_HISTORY_SCHEMA ?? '',
             }),
       },
     },
@@ -183,12 +182,9 @@ export default defineConfig({
         DATABRICKS_CLIENT_SECRET: 'mock-value',
         DATABRICKS_HOST: 'mock-value',
         // Always ephemeral in API_PROXY test mode
-        POSTGRES_URL: '',
-        PGHOST: '',
-        PGDATABASE: '',
-        PGUSER: '',
-        PGPASSWORD: '',
-        PGSSLMODE: '',
+        DATABRICKS_WAREHOUSE_ID: '',
+        CHAT_HISTORY_CATALOG: '',
+        CHAT_HISTORY_SCHEMA: '',
       },
     },
   ],

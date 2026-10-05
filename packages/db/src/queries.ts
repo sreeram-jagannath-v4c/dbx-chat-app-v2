@@ -1,92 +1,73 @@
-import {
-  and,
-  asc,
-  desc,
-  eq,
-  gt,
-  gte,
-  inArray,
-  lt,
-  sql,
-  type SQL,
-} from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import postgres from 'postgres';
-
-import {
-  chat,
-  message,
-  vote,
-  type DBMessage,
-  type Chat,
-  type Vote,
-} from './schema';
+/**
+ * Chat history persistence backed by Unity Catalog Delta tables, accessed
+ * through a Databricks SQL warehouse (Statement Execution API).
+ *
+ * Function signatures and return shapes match the previous Lakebase/Drizzle
+ * implementation so callers do not need to change.
+ */
+import type { DBMessage, Chat, Vote } from './schema';
 import type { VisibilityType } from '@chat-template/utils';
 import { ChatSDKError } from '@chat-template/core/errors';
 import type { LanguageModelV3Usage } from '@ai-sdk/provider';
-import { isDatabaseAvailable } from './connection';
-import { getAuthMethod, getAuthMethodDescription } from '@chat-template/auth';
+import { isDatabaseAvailable } from './connection-core';
+import { executeSql, tableName, type SqlParam } from './delta/sql-client';
 
-// Optionally, if not using email/pass login, you can
-// use the Drizzle adapter for Auth.js / NextAuth
-// https://authjs.dev/reference/adapter/drizzle
-let _db: ReturnType<typeof drizzle>;
+type Row = Record<string, string | null>;
 
-const getOrInitializeDb = async () => {
-  if (!isDatabaseAvailable()) {
-    throw new Error(
-      'Database configuration required. Please set PGDATABASE/PGHOST/PGUSER or POSTGRES_URL environment variables.',
-    );
+const CHAT_COLUMNS = 'id, created_at, title, user_id, visibility, last_context';
+const MESSAGE_COLUMNS =
+  'id, chat_id, role, parts, attachments, created_at, trace_id';
+
+/**
+ * Parse a TIMESTAMP value returned by the Statement Execution API.
+ * Values are UTC, e.g. `2026-10-03T12:34:56.789Z` (a space separator and a
+ * missing zone are tolerated).
+ */
+function parseTimestamp(value: string | null): Date {
+  if (!value) return new Date(Number.NaN);
+  let normalized = value.replace(' ', 'T');
+  if (!/(Z|[+-]\d{2}:?\d{2})$/.test(normalized)) normalized += 'Z';
+  return new Date(normalized);
+}
+
+function parseJson<T>(value: string | null, fallback: T): T {
+  if (value === null || value === '') return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
   }
+}
 
-  if (_db) return _db;
+function toChat(row: Row): Chat {
+  return {
+    id: row.id as string,
+    createdAt: parseTimestamp(row.created_at),
+    title: row.title as string,
+    userId: row.user_id as string,
+    visibility: (row.visibility as Chat['visibility']) ?? 'private',
+    lastContext: parseJson<LanguageModelV3Usage | null>(row.last_context, null),
+  };
+}
 
-  const authMethod = getAuthMethod();
-  if (authMethod === 'oauth' || authMethod === 'cli') {
-    // Dynamic auth path - db will be initialized asynchronously
-    console.log(
-      `Using ${getAuthMethodDescription()} authentication for Postgres connection`,
-    );
-  } else if (process.env.POSTGRES_URL) {
-    // Traditional connection string
-    const client = postgres(process.env.POSTGRES_URL);
-    _db = drizzle(client);
-  }
+function toMessage(row: Row): DBMessage {
+  return {
+    id: row.id as string,
+    chatId: row.chat_id as string,
+    role: row.role as string,
+    parts: parseJson<unknown>(row.parts, []),
+    attachments: parseJson<unknown>(row.attachments, []),
+    createdAt: parseTimestamp(row.created_at),
+    traceId: row.trace_id,
+  };
+}
 
-  return _db;
-};
-
-// Helper to ensure db is initialized for dynamic auth connections
-async function ensureDb() {
-  const db = await getOrInitializeDb();
-  // Always get a fresh DB instance for dynamic auth connections to handle token expiry
-  const authMethod = getAuthMethod();
-  if (authMethod === 'oauth' || authMethod === 'cli') {
-    const authDescription = getAuthMethodDescription();
-    console.log(`[ensureDb] Getting ${authDescription} database connection...`);
-    try {
-      // Import getDb for database connection
-      const { getDb } = await import('./connection-pool.js');
-      const database = await getDb();
-      console.log(
-        `[ensureDb] ${authDescription} db connection obtained successfully`,
-      );
-      return database;
-    } catch (error) {
-      console.error(
-        `[ensureDb] Failed to get ${authDescription} connection:`,
-        error,
-      );
-      throw error;
-    }
-  }
-
-  // For static connections (POSTGRES_URL), use cached instance
-  if (!db) {
-    console.error('[ensureDb] DB is still null after initialization attempt!');
-    throw new Error('Database connection could not be established');
-  }
-  return db;
+function toVote(row: Row): Vote {
+  return {
+    chatId: row.chat_id as string,
+    messageId: row.message_id as string,
+    isUpvoted: row.is_upvoted === 'true',
+  };
 }
 
 export async function saveChat({
@@ -106,13 +87,17 @@ export async function saveChat({
   }
 
   try {
-    return await (await ensureDb()).insert(chat).values({
-      id,
-      createdAt: new Date(),
-      userId,
-      title,
-      visibility,
-    });
+    await executeSql(
+      `INSERT INTO ${tableName('chatbot_chat')} (${CHAT_COLUMNS})
+       VALUES (:id, :created_at, :title, :user_id, :visibility, NULL)`,
+      [
+        { name: 'id', value: id },
+        { name: 'created_at', value: new Date() },
+        { name: 'title', value: title },
+        { name: 'user_id', value: userId },
+        { name: 'visibility', value: visibility },
+      ],
+    );
   } catch (error) {
     console.error('[saveChat] Error saving chat:', error);
     throw new ChatSDKError('bad_request:database', 'Failed to save chat');
@@ -126,14 +111,29 @@ export async function deleteChatById({ id }: { id: string }) {
   }
 
   try {
-    await (await ensureDb()).delete(message).where(eq(message.chatId, id));
+    const [deletedChat] = await executeSql(
+      `SELECT ${CHAT_COLUMNS} FROM ${tableName('chatbot_chat')} WHERE id = :id`,
+      [{ name: 'id', value: id }],
+    );
 
-    const [chatsDeleted] = await (await ensureDb())
-      .delete(chat)
-      .where(eq(chat.id, id))
-      .returning();
-    return chatsDeleted;
-  } catch (_error) {
+    const params = [{ name: 'id', value: id }];
+    // Children first: Delta has no FK cascade
+    await executeSql(
+      `DELETE FROM ${tableName('chatbot_vote')} WHERE chat_id = :id`,
+      params,
+    );
+    await executeSql(
+      `DELETE FROM ${tableName('chatbot_message')} WHERE chat_id = :id`,
+      params,
+    );
+    await executeSql(
+      `DELETE FROM ${tableName('chatbot_chat')} WHERE id = :id`,
+      params,
+    );
+
+    return deletedChat ? toChat(deletedChat) : undefined;
+  } catch (error) {
+    console.error('[deleteChatById] Error deleting chat:', error);
     throw new ChatSDKError(
       'bad_request:database',
       'Failed to delete chat by id',
@@ -158,76 +158,56 @@ export async function getChatsByUserId({
   }
 
   try {
-    const extendedLimit = limit + 1;
+    // Inlined into SQL (LIMIT), so make sure it is a plain integer
+    const extendedLimit = Number.isFinite(limit) ? Math.trunc(limit) + 1 : 11;
 
-    const query = async (whereCondition?: SQL<any>) => {
-      const database = await ensureDb();
+    const query = async (cursor?: { op: '>' | '<'; createdAt: Date }) => {
+      const params: SqlParam[] = [{ name: 'user_id', value: id }];
+      let cursorCondition = '';
+      if (cursor) {
+        cursorCondition = `AND created_at ${cursor.op} :cursor`;
+        params.push({ name: 'cursor', value: cursor.createdAt });
+      }
+      const rows = await executeSql(
+        `SELECT ${CHAT_COLUMNS} FROM ${tableName('chatbot_chat')}
+         WHERE user_id = :user_id ${cursorCondition}
+         ORDER BY created_at DESC
+         LIMIT ${extendedLimit}`,
+        params,
+      );
+      return rows.map(toChat);
+    };
 
-      return database
-        .select()
-        .from(chat)
-        .where(
-          whereCondition
-            ? and(whereCondition, eq(chat.userId, id))
-            : eq(chat.userId, id),
-        )
-        .orderBy(desc(chat.createdAt))
-        .limit(extendedLimit);
+    const getCursorChat = async (cursorId: string) => {
+      const chat = await getChatById({ id: cursorId });
+      if (!chat) {
+        throw new ChatSDKError(
+          'not_found:database',
+          `Chat with id ${cursorId} not found`,
+        );
+      }
+      return chat;
     };
 
     let filteredChats: Array<Chat> = [];
 
     if (startingAfter) {
-      console.log(
-        '[getChatsByUserId] Fetching chat for startingAfter:',
-        startingAfter,
-      );
-      const database = await ensureDb();
-      const [selectedChat] = await database
-        .select()
-        .from(chat)
-        .where(eq(chat.id, startingAfter))
-        .limit(1);
-
-      if (!selectedChat) {
-        throw new ChatSDKError(
-          'not_found:database',
-          `Chat with id ${startingAfter} not found`,
-        );
-      }
-
-      filteredChats = await query(gt(chat.createdAt, selectedChat.createdAt));
+      const selectedChat = await getCursorChat(startingAfter);
+      filteredChats = await query({
+        op: '>',
+        createdAt: selectedChat.createdAt,
+      });
     } else if (endingBefore) {
-      console.log(
-        '[getChatsByUserId] Fetching chat for endingBefore:',
-        endingBefore,
-      );
-      const database = await ensureDb();
-      const [selectedChat] = await database
-        .select()
-        .from(chat)
-        .where(eq(chat.id, endingBefore))
-        .limit(1);
-
-      if (!selectedChat) {
-        throw new ChatSDKError(
-          'not_found:database',
-          `Chat with id ${endingBefore} not found`,
-        );
-      }
-
-      filteredChats = await query(lt(chat.createdAt, selectedChat.createdAt));
+      const selectedChat = await getCursorChat(endingBefore);
+      filteredChats = await query({
+        op: '<',
+        createdAt: selectedChat.createdAt,
+      });
     } else {
-      console.log('[getChatsByUserId] Executing main query without pagination');
       filteredChats = await query();
     }
 
     const hasMore = filteredChats.length > limit;
-    console.log(
-      '[getChatsByUserId] Query successful, found',
-      filteredChats.length,
-      'chats',
-    );
 
     return {
       chats: hasMore ? filteredChats.slice(0, limit) : filteredChats,
@@ -235,10 +215,6 @@ export async function getChatsByUserId({
     };
   } catch (error) {
     console.error('[getChatsByUserId] Error details:', error);
-    console.error(
-      '[getChatsByUserId] Error stack:',
-      error instanceof Error ? error.stack : 'No stack available',
-    );
     throw new ChatSDKError(
       'bad_request:database',
       'Failed to get chats by user id',
@@ -253,16 +229,13 @@ export async function getChatById({ id }: { id: string }) {
   }
 
   try {
-    const [selectedChat] = await (await ensureDb())
-      .select()
-      .from(chat)
-      .where(eq(chat.id, id));
-    if (!selectedChat) {
-      return null;
-    }
-
-    return selectedChat;
-  } catch (_error) {
+    const [row] = await executeSql(
+      `SELECT ${CHAT_COLUMNS} FROM ${tableName('chatbot_chat')} WHERE id = :id LIMIT 1`,
+      [{ name: 'id', value: id }],
+    );
+    return row ? toChat(row) : null;
+  } catch (error) {
+    console.error('[getChatById] Error:', error);
     throw new ChatSDKError('bad_request:database', 'Failed to get chat by id');
   }
 }
@@ -277,23 +250,45 @@ export async function saveMessages({
     return;
   }
 
+  // MERGE fails if several source rows match one target row; keep the last
+  const uniqueMessages = [...new Map(messages.map((m) => [m.id, m])).values()];
+  if (uniqueMessages.length === 0) return;
+
   try {
-    // Use upsert to handle both new messages and updates (e.g., MCP approval continuations)
-    // When a message ID already exists, update its parts (which may have changed)
-    // Using sql`excluded.X` to reference the values that would have been inserted
-    return await (await ensureDb())
-      .insert(message)
-      .values(messages)
-      .onConflictDoUpdate({
-        target: message.id,
-        set: {
-          parts: sql`excluded.parts`,
-          attachments: sql`excluded.attachments`,
-          traceId: sql`excluded."traceId"`,
-        },
-      });
-  } catch (_error) {
-    console.error('[saveMessages] DB error:', _error);
+    const params: SqlParam[] = [];
+    const valueRows = uniqueMessages.map((m, i) => {
+      params.push(
+        { name: `id${i}`, value: m.id },
+        { name: `chat_id${i}`, value: m.chatId },
+        { name: `role${i}`, value: m.role },
+        { name: `parts${i}`, value: JSON.stringify(m.parts ?? []) },
+        { name: `attachments${i}`, value: JSON.stringify(m.attachments ?? []) },
+        { name: `created_at${i}`, value: m.createdAt ?? new Date() },
+        { name: `trace_id${i}`, value: m.traceId ?? null },
+      );
+      return `(:id${i}, :chat_id${i}, :role${i}, :parts${i}, :attachments${i}, :created_at${i}, :trace_id${i})`;
+    });
+
+    // Upsert: new messages are inserted; existing ones (e.g. MCP approval
+    // continuations) get their parts/attachments/trace ID updated
+    await executeSql(
+      `MERGE INTO ${tableName('chatbot_message')} AS target
+       USING (
+         SELECT * FROM VALUES ${valueRows.join(', ')}
+         AS v(${MESSAGE_COLUMNS})
+       ) AS source
+       ON target.id = source.id
+       WHEN MATCHED THEN UPDATE SET
+         parts = source.parts,
+         attachments = source.attachments,
+         trace_id = source.trace_id
+       WHEN NOT MATCHED THEN INSERT (${MESSAGE_COLUMNS})
+         VALUES (source.id, source.chat_id, source.role, source.parts,
+                 source.attachments, source.created_at, source.trace_id)`,
+      params,
+    );
+  } catch (error) {
+    console.error('[saveMessages] DB error:', error);
     throw new ChatSDKError('bad_request:database', 'Failed to save messages');
   }
 }
@@ -307,13 +302,15 @@ export async function getMessagesByChatId({ id }: { id: string }) {
   }
 
   try {
-    return await (await ensureDb())
-      .select()
-      .from(message)
-      .where(eq(message.chatId, id))
-      .orderBy(asc(message.createdAt));
-  } catch (_error) {
-    console.error('[getMessagesByChatId] Database error:', _error);
+    const rows = await executeSql(
+      `SELECT ${MESSAGE_COLUMNS} FROM ${tableName('chatbot_message')}
+       WHERE chat_id = :chat_id
+       ORDER BY created_at ASC`,
+      [{ name: 'chat_id', value: id }],
+    );
+    return rows.map(toMessage);
+  } catch (error) {
+    console.error('[getMessagesByChatId] Database error:', error);
     throw new ChatSDKError(
       'bad_request:database',
       'Failed to get messages by chat id',
@@ -328,11 +325,13 @@ export async function getMessageById({ id }: { id: string }) {
   }
 
   try {
-    return await (await ensureDb())
-      .select()
-      .from(message)
-      .where(eq(message.id, id));
-  } catch (_error) {
+    const rows = await executeSql(
+      `SELECT ${MESSAGE_COLUMNS} FROM ${tableName('chatbot_message')} WHERE id = :id`,
+      [{ name: 'id', value: id }],
+    );
+    return rows.map(toMessage);
+  } catch (error) {
+    console.error('[getMessageById] Database error:', error);
     throw new ChatSDKError(
       'bad_request:database',
       'Failed to get message by id',
@@ -355,26 +354,27 @@ export async function deleteMessagesByChatIdAfterTimestamp({
   }
 
   try {
-    const messagesToDelete = await (await ensureDb())
-      .select({ id: message.id })
-      .from(message)
-      .where(
-        and(eq(message.chatId, chatId), gte(message.createdAt, timestamp)),
-      );
-
-    const messageIds = messagesToDelete.map((message) => message.id);
-
-    if (messageIds.length > 0) {
-      const db = await ensureDb();
-      // Delete votes first to satisfy the Vote.messageId → Message.id FK constraint
-      await db.delete(vote).where(inArray(vote.messageId, messageIds));
-      return await db
-        .delete(message)
-        .where(
-          and(eq(message.chatId, chatId), inArray(message.id, messageIds)),
-        );
-    }
-  } catch (_error) {
+    const params: SqlParam[] = [
+      { name: 'chat_id', value: chatId },
+      { name: 'timestamp', value: timestamp },
+    ];
+    // Votes first so none are left pointing at deleted messages
+    await executeSql(
+      `DELETE FROM ${tableName('chatbot_vote')}
+       WHERE chat_id = :chat_id
+         AND message_id IN (
+           SELECT id FROM ${tableName('chatbot_message')}
+           WHERE chat_id = :chat_id AND created_at >= :timestamp
+         )`,
+      params,
+    );
+    await executeSql(
+      `DELETE FROM ${tableName('chatbot_message')}
+       WHERE chat_id = :chat_id AND created_at >= :timestamp`,
+      params,
+    );
+  } catch (error) {
+    console.error('[deleteMessagesByChatIdAfterTimestamp] Error:', error);
     throw new ChatSDKError(
       'bad_request:database',
       'Failed to delete messages by chat id after timestamp',
@@ -397,18 +397,21 @@ export async function updateChatVisiblityById({
   }
 
   try {
-    return await (await ensureDb())
-      .update(chat)
-      .set({ visibility })
-      .where(eq(chat.id, chatId));
-  } catch (_error) {
+    await executeSql(
+      `UPDATE ${tableName('chatbot_chat')} SET visibility = :visibility WHERE id = :id`,
+      [
+        { name: 'visibility', value: visibility },
+        { name: 'id', value: chatId },
+      ],
+    );
+  } catch (error) {
+    console.error('[updateChatVisiblityById] Error:', error);
     throw new ChatSDKError(
       'bad_request:database',
       'Failed to update chat visibility by id',
     );
   }
 }
-
 
 export async function updateChatTitleById({
   chatId,
@@ -418,16 +421,22 @@ export async function updateChatTitleById({
   title: string;
 }) {
   if (!isDatabaseAvailable()) {
-    console.log('[updateChatTitleById] Database not available, skipping update');
+    console.log(
+      '[updateChatTitleById] Database not available, skipping update',
+    );
     return;
   }
 
   try {
-    return await (await ensureDb())
-      .update(chat)
-      .set({ title })
-      .where(eq(chat.id, chatId));
-  } catch (_error) {
+    await executeSql(
+      `UPDATE ${tableName('chatbot_chat')} SET title = :title WHERE id = :id`,
+      [
+        { name: 'title', value: title },
+        { name: 'id', value: chatId },
+      ],
+    );
+  } catch (error) {
+    console.error('[updateChatTitleById] Error:', error);
     throw new ChatSDKError(
       'bad_request:database',
       'Failed to update chat title by id',
@@ -451,10 +460,13 @@ export async function updateChatLastContextById({
   }
 
   try {
-    return await (await ensureDb())
-      .update(chat)
-      .set({ lastContext: context })
-      .where(eq(chat.id, chatId));
+    await executeSql(
+      `UPDATE ${tableName('chatbot_chat')} SET last_context = :context WHERE id = :id`,
+      [
+        { name: 'context', value: JSON.stringify(context) },
+        { name: 'id', value: chatId },
+      ],
+    );
   } catch (error) {
     console.warn('Failed to update lastContext for chat', chatId, error);
     return;
@@ -474,21 +486,38 @@ export async function voteMessage({
     return;
   }
 
-  const db = await ensureDb();
-  await db
-    .insert(vote)
-    .values({ chatId, messageId, isUpvoted: type === 'up' })
-    .onConflictDoUpdate({
-      target: [vote.chatId, vote.messageId],
-      set: { isUpvoted: type === 'up' },
-    });
+  await executeSql(
+    `MERGE INTO ${tableName('chatbot_vote')} AS target
+     USING (
+       SELECT :chat_id AS chat_id, :message_id AS message_id,
+              :is_upvoted AS is_upvoted, :updated_at AS updated_at
+     ) AS source
+     ON target.chat_id = source.chat_id AND target.message_id = source.message_id
+     WHEN MATCHED THEN UPDATE SET
+       is_upvoted = source.is_upvoted,
+       updated_at = source.updated_at
+     WHEN NOT MATCHED THEN INSERT (chat_id, message_id, is_upvoted, updated_at)
+       VALUES (source.chat_id, source.message_id, source.is_upvoted, source.updated_at)`,
+    [
+      { name: 'chat_id', value: chatId },
+      { name: 'message_id', value: messageId },
+      { name: 'is_upvoted', value: type === 'up' },
+      { name: 'updated_at', value: new Date() },
+    ],
+  );
 }
 
-export async function getVotesByChatId({ id }: { id: string }): Promise<Vote[]> {
+export async function getVotesByChatId({
+  id,
+}: { id: string }): Promise<Vote[]> {
   if (!isDatabaseAvailable()) {
     return [];
   }
 
-  const db = await ensureDb();
-  return db.select().from(vote).where(eq(vote.chatId, id));
+  const rows = await executeSql(
+    `SELECT chat_id, message_id, is_upvoted FROM ${tableName('chatbot_vote')}
+     WHERE chat_id = :chat_id`,
+    [{ name: 'chat_id', value: id }],
+  );
+  return rows.map(toVote);
 }

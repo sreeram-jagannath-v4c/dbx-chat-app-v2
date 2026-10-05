@@ -5,22 +5,27 @@ variables:
   serving_endpoint_name:
     description: "Name of the model serving endpoint to be used by the app"
     default: "ka-656f86bb-endpoint"
-  database_instance_name:
-    description: "Base name of the Lakebase database instance"
-    default: "chatbot-lakebase-dev"
+  sql_warehouse_id:
+    description: "ID of the SQL warehouse used to read/write the Delta chat history tables"
+    # TODO: set the SQL warehouse ID (e.g. from `databricks warehouses list`)
+    default: "7bf8d51638001078"
+  chat_history_catalog:
+    description: "Unity Catalog catalog holding the chat history Delta tables"
+    default: "datascience_qa"
+  chat_history_schema:
+    description: "Unity Catalog schema holding the chat history Delta tables"
+    default: "curated"
   resource_name_suffix:
     description: "Suffix for resource names (app/lakebase instance names etc). Helpful for avoiding name collisions if multiple users deploy this app to the same workspace"
   pdf_volume_name:
     description: "Full Unity Catalog path to the PDF volume"
     default: "datascience_qa.curated.sharepoint_files_pdf"
 
-resources:  
-  database_instances:
-    
-    chatbot_lakebase:
-      name: ${var.database_instance_name}-${var.resource_name_suffix}
-      capacity: CU_1
-
+resources:
+  # Chat history and feedback are stored in Delta tables
+  # (${var.chat_history_catalog}.${var.chat_history_schema}.chatbot_*), created
+  # by `npm run db:setup-delta` during the app build. The app service principal
+  # needs USE CATALOG, USE SCHEMA, CREATE TABLE, SELECT and MODIFY there.
   apps:
     databricks_chatbot:
       # NOTE: customize the app name here, if desired
@@ -47,17 +52,15 @@ resources:
             securable_type: VOLUME
             permission: READ_VOLUME
 
-        # TODO (optional): Uncomment the database resource below to bind the app to the database instance above
-        # and enable persistent chat history
-        - name: database
-          description: "Lakebase database instance for the chat app"
-          database:
-            database_name: databricks_postgres
-            instance_name: ${resources.database_instances.chatbot_lakebase.name}
-            permission: CAN_CONNECT_AND_CREATE
+        - name: sql-warehouse
+          description: "SQL warehouse for the Delta chat history tables"
+          sql_warehouse:
+            id: ${var.sql_warehouse_id}
+            permission: CAN_USE
+
         # TODO (optional): Uncomment the experiment resource below to enable the feedback widget.
         # First run `npx tsx scripts/get-experiment-id.ts --endpoint <your-endpoint-name>` to find the experiment ID.
-        # Note: enabling feedback also requires a database (uncomment both TODO database blocks above).
+        # Note: enabling feedback also requires chat history (the sql-warehouse resource above).
         - name: experiment
           description: "MLflow experiment for collecting user feedback"
           experiment:

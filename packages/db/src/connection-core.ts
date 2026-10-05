@@ -47,12 +47,24 @@ export function getDatabaseConfigFromEnv(): DatabaseConfig | null {
 }
 
 /**
- * Check if database storage is available
+ * Check if persistent chat storage is available.
+ * Chat history is stored in Delta tables via a SQL warehouse, so this
+ * requires the warehouse ID and the target catalog/schema.
  */
 export function isDatabaseAvailable(): boolean {
-  const isAvailable = !!(process.env.PGDATABASE || process.env.POSTGRES_URL);
-  console.log(`[isDatabaseAvailable] Database available: ${isAvailable}`);
-  return isAvailable;
+  return !!(
+    process.env.DATABRICKS_WAREHOUSE_ID &&
+    process.env.CHAT_HISTORY_CATALOG &&
+    process.env.CHAT_HISTORY_SCHEMA
+  );
+}
+
+/**
+ * Check if a (legacy) Lakebase/Postgres connection is configured.
+ * Only used by the Postgres migration/reset scripts.
+ */
+export function isPostgresConfigured(): boolean {
+  return !!(process.env.PGDATABASE || process.env.POSTGRES_URL);
 }
 
 /**
@@ -79,7 +91,7 @@ export function getPostgresUrlFromEnv(): string | null {
  * Validate that required database environment variables are set
  */
 export function validateDatabaseConfig(): void {
-  if (!isDatabaseAvailable()) {
+  if (!isPostgresConfigured()) {
     throw new Error('Either POSTGRES_URL or PGHOST and PGDATABASE must be set');
   }
 }

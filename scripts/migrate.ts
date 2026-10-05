@@ -16,8 +16,10 @@ config({
 });
 
 // Now import other modules that depend on environment variables
+// Legacy: applies Drizzle migrations to a Lakebase/Postgres database.
+// Chat history now lives in Delta tables (see scripts/setup-delta.ts).
 import {
-  isDatabaseAvailable,
+  isPostgresConfigured,
   getSchemaName,
   getConnectionUrl,
 } from '@chat-template/db';
@@ -27,7 +29,7 @@ async function main() {
   console.log('🔄 Running database migration...');
 
   // Require database configuration
-  if (!isDatabaseAvailable()) {
+  if (!isPostgresConfigured()) {
     console.warn('⚠️ Database configuration not found!');
     console.warn(
       'ℹ️ Please set PGDATABASE/PGHOST/PGUSER or POSTGRES_URL environment variables to run migrations.',
