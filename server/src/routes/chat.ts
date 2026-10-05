@@ -128,12 +128,20 @@ chatRouter.post('/', requireAuth, async (req: Request, res: Response) => {
     if (!chat) {
       // Only create new chat if we have a message (not a continuation)
       if (isDatabaseAvailable() && message) {
-        await saveChat({
+        const created = await saveChat({
           id,
           userId: session.user.id,
+          userEmail: session.user.email,
           title: 'New chat',
           visibility: selectedVisibilityType,
         });
+
+        // Id already taken by a soft-deleted chat: don't revive it
+        if (!created) {
+          const error = new ChatSDKError('not_found:chat');
+          const response = error.toResponse();
+          return res.status(response.status).json(response.json);
+        }
 
         titlePromise = generateTitleFromUserMessage({ message })
           .then(async (title) => {

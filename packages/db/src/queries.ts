@@ -70,34 +70,48 @@ function toVote(row: Row): Vote {
   };
 }
 
+/**
+ * Create a chat. Returns false (and writes nothing) if a chat with this id
+ * already exists, including a soft-deleted one, so a deleted chat cannot be
+ * revived by re-posting to its id.
+ */
 export async function saveChat({
   id,
   userId,
+  userEmail,
   title,
   visibility,
 }: {
   id: string;
   userId: string;
+  userEmail?: string | null;
   title: string;
   visibility: VisibilityType;
-}) {
+}): Promise<boolean> {
   if (!isDatabaseAvailable()) {
     console.log('[saveChat] Database not available, skipping persistence');
-    return;
+    return true;
   }
 
   try {
-    await executeSql(
-      `INSERT INTO ${tableName('chatbot_chat')} (${CHAT_COLUMNS})
-       VALUES (:id, :created_at, :title, :user_id, :visibility, NULL)`,
+    const [result] = await executeSql(
+      `MERGE INTO ${tableName('chatbot_chat')} AS target
+       USING (SELECT :id AS id) AS source
+       ON target.id = source.id
+       WHEN NOT MATCHED THEN INSERT
+         (${CHAT_COLUMNS}, user_email, deleted_at)
+         VALUES (:id, :created_at, :title, :user_id, :visibility, NULL,
+                 :user_email, NULL)`,
       [
         { name: 'id', value: id },
         { name: 'created_at', value: new Date() },
         { name: 'title', value: title },
         { name: 'user_id', value: userId },
         { name: 'visibility', value: visibility },
+        { name: 'user_email', value: userEmail || null },
       ],
     );
+    return Number(result?.num_inserted_rows ?? 0) > 0;
   } catch (error) {
     console.error('[saveChat] Error saving chat:', error);
     throw new ChatSDKError('bad_request:database', 'Failed to save chat');
@@ -111,27 +125,19 @@ export async function deleteChatById({ id }: { id: string }) {
   }
 
   try {
-    const [deletedChat] = await executeSql(
-      `SELECT ${CHAT_COLUMNS} FROM ${tableName('chatbot_chat')} WHERE id = :id`,
-      [{ name: 'id', value: id }],
+    const deletedChat = await getChatById({ id });
+
+    // Soft delete: hidden from the user, messages and votes kept for auditing
+    await executeSql(
+      `UPDATE ${tableName('chatbot_chat')} SET deleted_at = :now
+       WHERE id = :id AND deleted_at IS NULL`,
+      [
+        { name: 'id', value: id },
+        { name: 'now', value: new Date() },
+      ],
     );
 
-    const params = [{ name: 'id', value: id }];
-    // Children first: Delta has no FK cascade
-    await executeSql(
-      `DELETE FROM ${tableName('chatbot_vote')} WHERE chat_id = :id`,
-      params,
-    );
-    await executeSql(
-      `DELETE FROM ${tableName('chatbot_message')} WHERE chat_id = :id`,
-      params,
-    );
-    await executeSql(
-      `DELETE FROM ${tableName('chatbot_chat')} WHERE id = :id`,
-      params,
-    );
-
-    return deletedChat ? toChat(deletedChat) : undefined;
+    return deletedChat ?? undefined;
   } catch (error) {
     console.error('[deleteChatById] Error deleting chat:', error);
     throw new ChatSDKError(
@@ -170,7 +176,7 @@ export async function getChatsByUserId({
       }
       const rows = await executeSql(
         `SELECT ${CHAT_COLUMNS} FROM ${tableName('chatbot_chat')}
-         WHERE user_id = :user_id ${cursorCondition}
+         WHERE user_id = :user_id AND deleted_at IS NULL ${cursorCondition}
          ORDER BY created_at DESC
          LIMIT ${extendedLimit}`,
         params,
@@ -230,7 +236,9 @@ export async function getChatById({ id }: { id: string }) {
 
   try {
     const [row] = await executeSql(
-      `SELECT ${CHAT_COLUMNS} FROM ${tableName('chatbot_chat')} WHERE id = :id LIMIT 1`,
+      `SELECT ${CHAT_COLUMNS} FROM ${tableName('chatbot_chat')}
+       WHERE id = :id AND deleted_at IS NULL
+       LIMIT 1`,
       [{ name: 'id', value: id }],
     );
     return row ? toChat(row) : null;
@@ -270,7 +278,8 @@ export async function saveMessages({
     });
 
     // Upsert: new messages are inserted; existing ones (e.g. MCP approval
-    // continuations) get their parts/attachments/trace ID updated
+    // continuations) get their parts/attachments/trace ID updated. Re-saving
+    // a message soft-deleted by an edit/regenerate makes it visible again.
     await executeSql(
       `MERGE INTO ${tableName('chatbot_message')} AS target
        USING (
@@ -281,7 +290,8 @@ export async function saveMessages({
        WHEN MATCHED THEN UPDATE SET
          parts = source.parts,
          attachments = source.attachments,
-         trace_id = source.trace_id
+         trace_id = source.trace_id,
+         deleted_at = NULL
        WHEN NOT MATCHED THEN INSERT (${MESSAGE_COLUMNS})
          VALUES (source.id, source.chat_id, source.role, source.parts,
                  source.attachments, source.created_at, source.trace_id)`,
@@ -304,7 +314,7 @@ export async function getMessagesByChatId({ id }: { id: string }) {
   try {
     const rows = await executeSql(
       `SELECT ${MESSAGE_COLUMNS} FROM ${tableName('chatbot_message')}
-       WHERE chat_id = :chat_id
+       WHERE chat_id = :chat_id AND deleted_at IS NULL
        ORDER BY created_at ASC`,
       [{ name: 'chat_id', value: id }],
     );
@@ -326,7 +336,8 @@ export async function getMessageById({ id }: { id: string }) {
 
   try {
     const rows = await executeSql(
-      `SELECT ${MESSAGE_COLUMNS} FROM ${tableName('chatbot_message')} WHERE id = :id`,
+      `SELECT ${MESSAGE_COLUMNS} FROM ${tableName('chatbot_message')}
+       WHERE id = :id AND deleted_at IS NULL`,
       [{ name: 'id', value: id }],
     );
     return rows.map(toMessage);
@@ -354,24 +365,17 @@ export async function deleteMessagesByChatIdAfterTimestamp({
   }
 
   try {
-    const params: SqlParam[] = [
-      { name: 'chat_id', value: chatId },
-      { name: 'timestamp', value: timestamp },
-    ];
-    // Votes first so none are left pointing at deleted messages
+    // Soft delete: hidden from the user, rows and votes kept for auditing
     await executeSql(
-      `DELETE FROM ${tableName('chatbot_vote')}
+      `UPDATE ${tableName('chatbot_message')} SET deleted_at = :now
        WHERE chat_id = :chat_id
-         AND message_id IN (
-           SELECT id FROM ${tableName('chatbot_message')}
-           WHERE chat_id = :chat_id AND created_at >= :timestamp
-         )`,
-      params,
-    );
-    await executeSql(
-      `DELETE FROM ${tableName('chatbot_message')}
-       WHERE chat_id = :chat_id AND created_at >= :timestamp`,
-      params,
+         AND created_at >= :timestamp
+         AND deleted_at IS NULL`,
+      [
+        { name: 'chat_id', value: chatId },
+        { name: 'timestamp', value: timestamp },
+        { name: 'now', value: new Date() },
+      ],
     );
   } catch (error) {
     console.error('[deleteMessagesByChatIdAfterTimestamp] Error:', error);

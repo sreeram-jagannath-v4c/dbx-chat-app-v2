@@ -7,7 +7,6 @@ variables:
     default: "ka-656f86bb-endpoint"
   sql_warehouse_id:
     description: "ID of the SQL warehouse used to read/write the Delta chat history tables"
-    # TODO: set the SQL warehouse ID (e.g. from `databricks warehouses list`)
     default: "7bf8d51638001078"
   chat_history_catalog:
     description: "Unity Catalog catalog holding the chat history Delta tables"

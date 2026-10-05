@@ -31,7 +31,10 @@ async function main() {
   }
 
   try {
-    await ensureDeltaTables();
+    const { addedColumns } = await ensureDeltaTables();
+    for (const column of addedColumns) {
+      console.log(`➕ Added column ${column}`);
+    }
     for (const table of [
       'chatbot_chat',
       'chatbot_message',

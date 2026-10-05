@@ -75,12 +75,12 @@ function quoteIdentifier(name: string): string {
   return `\`${name.replace(/`/g, '``')}\``;
 }
 
-/**
- * Fully qualified, backtick-quoted name of a chat history table.
- */
-export function tableName(
-  table: 'chatbot_chat' | 'chatbot_message' | 'chatbot_vote',
-): string {
+export type ChatHistoryTable =
+  | 'chatbot_chat'
+  | 'chatbot_message'
+  | 'chatbot_vote';
+
+function requireCatalogAndSchema(): { catalog: string; schema: string } {
   const catalog = getChatHistoryCatalog();
   const schema = getChatHistorySchema();
   if (!catalog || !schema) {
@@ -88,6 +88,21 @@ export function tableName(
       'CHAT_HISTORY_CATALOG and CHAT_HISTORY_SCHEMA must be set to use Delta chat history',
     );
   }
+  return { catalog, schema };
+}
+
+/**
+ * Backtick-quoted name of the chat history catalog.
+ */
+export function catalogName(): string {
+  return quoteIdentifier(requireCatalogAndSchema().catalog);
+}
+
+/**
+ * Fully qualified, backtick-quoted name of a chat history table.
+ */
+export function tableName(table: ChatHistoryTable): string {
+  const { catalog, schema } = requireCatalogAndSchema();
   return `${quoteIdentifier(catalog)}.${quoteIdentifier(schema)}.${table}`;
 }
 

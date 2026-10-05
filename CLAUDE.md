@@ -69,6 +69,19 @@ e2e-chatbot-app-next/
 
 - Biome 1.9.4 for linting and formatting (NOT ESLint/Prettier)
 
+## Workspace Specifics (Johnsonville)
+
+- **SQL warehouse for CLI checks**: always use warehouse ID `7bf8d51638001078`
+  when running SQL via the Databricks CLI (e.g. verifying the Delta chat
+  history tables), e.g.:
+  ```bash
+  databricks api post /api/2.0/sql/statements --profile <profile> --json '{
+    "warehouse_id": "7bf8d51638001078",
+    "statement": "SELECT * FROM datascience_qa.curated.chatbot_chat LIMIT 10",
+    "wait_timeout": "30s"
+  }'
+  ```
+
 ## Essential Commands
 
 ### Quick Start Scripts
