@@ -62,6 +62,20 @@ import {
 import { ChatSDKError } from '@chat-template/core/errors';
 import { storeMessageMeta } from '../lib/message-meta-store';
 import { drainStreamToWriter, fallbackToGenerateText } from '../lib/stream-fallback';
+import { getWorkspaceHostname } from '@chat-template/ai-sdk-providers';
+import {
+  getKnowledgeVolumes,
+  resolveKnowledgeScope,
+  unrestrictedScope,
+  type KnowledgeScope,
+} from '../lib/knowledge-access';
+import {
+  BufferedWriter,
+  buildScopeInstruction,
+  buildStrictInstruction,
+  releaseGuarded,
+  stripGuardNotices,
+} from '../lib/knowledge-guard';
 
 export const chatRouter: RouterType = Router();
 
@@ -111,6 +125,56 @@ chatRouter.post('/', requireAuth, async (req: Request, res: Response) => {
       const response = error.toResponse();
       return res.status(response.status).json(response.json);
     }
+
+    // Per-user knowledge scope: which of the knowledge agent's volumes this
+    // user can read, resolved with the user's own token. Disabled when
+    // KNOWLEDGE_VOLUMES is not set.
+    const knowledgeVolumes = getKnowledgeVolumes();
+    const oboToken = req.headers['x-forwarded-access-token'];
+    let knowledgeScope: KnowledgeScope | null = null;
+    if (knowledgeVolumes.length > 0) {
+      if (typeof oboToken === 'string' && oboToken) {
+        knowledgeScope = await resolveKnowledgeScope({
+          userKey: session.user.id,
+          userToken: oboToken,
+          host: await getWorkspaceHostname(),
+          volumes: knowledgeVolumes,
+        });
+        if (knowledgeScope.allowedVolumes.length === 0) {
+          console.warn(
+            '[knowledge-scope] Rejecting chat: the user cannot read any knowledge volume',
+            { user: session.user.email ?? session.user.id, volumes: knowledgeVolumes },
+          );
+          const error = new ChatSDKError(
+            'forbidden:api',
+            'You do not have access to any knowledge base',
+          );
+          const response = error.toResponse();
+          return res.status(response.status).json(response.json);
+        }
+      } else if (process.env.NODE_ENV !== 'production') {
+        // Local development has no user token, so nothing can be restricted.
+        knowledgeScope = unrestrictedScope(knowledgeVolumes);
+      } else {
+        console.warn(
+          '[knowledge-scope] Rejecting chat: no x-forwarded-access-token on the request',
+          { user: session.user.email ?? session.user.id },
+        );
+        const error = new ChatSDKError(
+          'forbidden:api',
+          'User authorization is required',
+        );
+        const response = error.toResponse();
+        return res.status(response.status).json(response.json);
+      }
+    }
+    const restrictedScope =
+      knowledgeScope && knowledgeScope.deniedVolumes.length > 0
+        ? knowledgeScope
+        : null;
+    const scopeInstruction = restrictedScope
+      ? buildScopeInstruction(restrictedScope)
+      : undefined;
 
     const { chat, allowed, reason } = await checkChatAccess(
       id,
@@ -248,7 +312,7 @@ chatRouter.post('/', requireAuth, async (req: Request, res: Response) => {
     const streamId = generateUUID();
 
     const model = await myProvider.languageModel(selectedChatModel);
-    const modelMessages = await convertToModelMessages(uiMessages);
+    const modelMessages = await convertToModelMessages(stripGuardNotices(uiMessages));
     const requestHeaders = {
       [CONTEXT_HEADER_CONVERSATION_ID]: id,
       [CONTEXT_HEADER_USER_ID]: session.user.email ?? session.user.id,
@@ -261,6 +325,7 @@ chatRouter.post('/', requireAuth, async (req: Request, res: Response) => {
     const result = streamText({
       model,
       messages: modelMessages,
+      ...(scopeInstruction ? { system: scopeInstruction } : {}),
       providerOptions: {
         databricks: { includeTrace: true },
       },
@@ -302,7 +367,12 @@ chatRouter.post('/', requireAuth, async (req: Request, res: Response) => {
       // The DB Message.id column is typed as uuid, so we must generate UUIDs
       // rather than the AI SDK's default short-id format (e.g. "Xt8nZiQRj1fS4yiU").
       generateId: generateUUID,
-      execute: async ({ writer }) => {
+      execute: async ({ writer: streamWriter }) => {
+        // For restricted users the response is buffered and reviewed before
+        // anything is sent; everyone else streams straight through.
+        const buffered = restrictedScope ? new BufferedWriter() : null;
+        const writer = buffered ? buffered.asWriter() : streamWriter;
+
         // Manually drain the AI stream so we can append the traceId data part
         // after all model chunks are processed (traceId is captured via onChunk).
         // result.toUIMessageStream() converts TextStreamPart → UIMessageChunk:
@@ -327,22 +397,46 @@ chatRouter.post('/', requireAuth, async (req: Request, res: Response) => {
         if (failed) {
           console.log('Streaming failed, falling back to generateText...');
           const fallbackResult = await fallbackToGenerateText(
-            { model, messages: modelMessages, headers: requestHeaders },
+            {
+              model,
+              messages: modelMessages,
+              headers: requestHeaders,
+              ...(scopeInstruction ? { system: scopeInstruction } : {}),
+            },
             writer,
           );
 
           finalUsage = fallbackResult?.usage;
           traceId = fallbackResult?.traceId ?? null;
         }
+        if (buffered && restrictedScope) {
+          const released = await releaseGuarded({
+            buffered,
+            writer: streamWriter,
+            scope: restrictedScope,
+            regenerate: (retryWriter) =>
+              fallbackToGenerateText(
+                {
+                  model,
+                  messages: modelMessages,
+                  headers: requestHeaders,
+                  system: buildStrictInstruction(restrictedScope),
+                },
+                retryWriter,
+              ),
+          });
+          if (released.traceId) traceId = released.traceId;
+        }
+
         if (titlePromise) {
           const generatedTitle = await titlePromise;
           if (generatedTitle) {
-            writer.write({ type: 'data-title', data: generatedTitle });
+            streamWriter.write({ type: 'data-title', data: generatedTitle });
           }
         }
 
         // Write traceId so the client knows whether feedback is supported.
-        writer.write({ type: 'data-traceId', data: traceId });
+        streamWriter.write({ type: 'data-traceId', data: traceId });
       },
       onFinish: async ({ responseMessage }) => {
         // Store in-memory for ephemeral mode (also useful when DB is available)

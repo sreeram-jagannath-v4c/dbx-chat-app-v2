@@ -254,7 +254,11 @@ export function Chat({
       if (error instanceof ChatSDKError) {
         toast({
           type: 'error',
-          description: error.message,
+          // Forbidden errors carry a specific, user-safe reason.
+          description:
+            error.type === 'forbidden' && error.cause
+              ? error.cause
+              : error.message,
         });
       } else {
         // Non-ChatSDKError: Could be network error or in-stream error

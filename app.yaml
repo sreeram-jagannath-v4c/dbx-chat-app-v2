@@ -4,6 +4,10 @@ runtime: nodejs20
 env:
   - name: DATABRICKS_SERVING_ENDPOINT
     valueFrom: serving-endpoint
+  # Every volume in the knowledge agent's knowledge base (comma-separated).
+  # Each user only gets answers from the volumes they can read.
+  - name: KNOWLEDGE_VOLUMES
+    value: "poc.agent_files.all_files,poc.agent_files.all_files2"
   # FEEDBACK RESOURCE: Uncomment to enable the feedback UI (requires experiment resource in databricks.yml)
   - name: MLFLOW_EXPERIMENT_ID
     valueFrom: experiment

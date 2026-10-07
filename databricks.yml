@@ -7,7 +7,7 @@ bundle:
 variables:
   serving_endpoint_name:
     description: "Name of the model serving endpoint to be used by the app"
-    default: "ka-39fe1d5a-endpoint"
+    default: "ka-4dc0bf8b-endpoint"
 
   database_instance_name:
     description: "Base name of the Lakebase database instance"
@@ -15,10 +15,6 @@ variables:
 
   resource_name_suffix:
     description: "Suffix for resource names (app/lakebase instance names etc). Helpful for avoiding name collisions if multiple users deploy this app to the same workspace"
-
-  pdf_volume_name:
-    description: "Full Unity Catalog path to the PDF volume"
-    default: "poc.agent_files.all_files"
 
 # -----------------------------------------------------------------------------
 # Resources
@@ -51,12 +47,10 @@ resources:
             name: ${var.serving_endpoint_name}
             permission: CAN_MANAGE
 
-        # Unity Catalog volume holding the PDFs used for citations and preview.
-        - name: pdf-volume
-          uc_securable:
-            securable_full_name: ${var.pdf_volume_name}
-            securable_type: VOLUME
-            permission: READ_VOLUME
+        # No volume resources here on purpose: document previews run as the
+        # signed-in user (files.files scope), so Unity Catalog enforces each
+        # user's READ VOLUME grants. Do not grant the app service principal
+        # access to the knowledge volumes.
 
         # Lakebase database for persistent chat history.
         - name: database
@@ -71,7 +65,7 @@ resources:
         - name: experiment
           description: "MLflow experiment for collecting user feedback"
           experiment:
-            experiment_id: "2378321935419041"
+            experiment_id: "2507257183125652"
             permission: CAN_EDIT
 
 # -----------------------------------------------------------------------------

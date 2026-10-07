@@ -75,7 +75,8 @@ function inlineContentDisposition(fileName: string): string {
  *
  * Proxies a PDF from the Databricks Files API so it can be rendered inline
  * (the Files API itself responds with `Content-Disposition: attachment`).
- * Uses the user's OBO token when present, otherwise the app's credentials.
+ * Runs as the signed-in user (OBO token), so Unity Catalog enforces their
+ * volume grants. App credentials are only used in local development.
  */
 filesRouter.get(
   '/preview',
@@ -94,7 +95,21 @@ filesRouter.get(
     const fileName = volumePath.split('/').pop() ?? 'document.pdf';
 
     try {
-      const token = await getDatabricksToken();
+      // Run as the signed-in user so Unity Catalog enforces their volume
+      // grants. Only local development (no user token) may use app credentials.
+      const userToken = req.headers['x-forwarded-access-token'];
+      let token: string;
+      if (typeof userToken === 'string' && userToken) {
+        token = userToken;
+      } else if (process.env.NODE_ENV !== 'production') {
+        token = await getDatabricksToken();
+      } else {
+        return sendError(
+          res,
+          'forbidden:api',
+          'User authorization is required to preview files',
+        );
+      }
       const hostUrl = await getWorkspaceHostname();
 
       const upstreamHeaders: Record<string, string> = {
